@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { configFindings } from './configcli.ts';
 import { installedBuild } from './fxserver.ts';
 import { fxServerExecutable } from './fxserver.ts';
 import { layoutOf } from './layout.ts';
@@ -28,6 +29,8 @@ export function runDoctor(dir: string): number {
             ? { ok: true, text: `Ressource ${resource} présente` }
             : { ok: false, text: `Ressource ${resource} absente`, fix: 'Relance prax install pour remettre les fichiers de la base.' });
     }
+
+    if (fs.existsSync(`${layout.resources}/pcore/schema/index.json`)) findings.push(...configFindings(layout.resources));
 
     if (!fs.existsSync(layout.serverCfg)) {
         findings.push({ ok: false, text: 'server.cfg absent', fix: 'Relance prax install --reconfigure.' });

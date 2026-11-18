@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import { CONFIG_USAGE, runConfig } from './configcli.ts';
 import { runDoctor } from './doctor.ts';
 import type { FxChannel } from './fxserver.ts';
 import { runInstall } from './install.ts';
@@ -12,6 +13,7 @@ const USAGE = `prax ${VERSION} : installe et configure la base Prax
 Utilisation :
   prax install [options]     installe la base, FXServer, la base de données, server.cfg et txAdmin
   prax doctor [--dir <dossier>]   cherche ce qui empêche le serveur de démarrer
+  prax config <get|set|unset|check>   lit et modifie les réglages de la base (prax config --help)
   prax version
 
 Options de prax install :
@@ -32,7 +34,31 @@ function parsePort(value: string, option: string): number {
     return port;
 }
 
+function runConfigCommand(argv: string[]): number {
+    const args: string[] = [];
+    let dir = 'prax-server';
+    let resources: string | undefined;
+    for (let index = 0; index < argv.length; index++) {
+        const arg = argv[index] ?? '';
+        if (arg === '--dir' || arg === '--resources') {
+            const value = argv[++index];
+            if (!value) throw new InstallError(`${arg} demande un dossier`);
+            if (arg === '--dir') dir = value;
+            else resources = value;
+        } else if (arg === '--help' || arg === '-h') {
+            console.log(CONFIG_USAGE);
+            return 0;
+        } else {
+            args.push(arg);
+        }
+    }
+    return runConfig(args, dir, resources);
+}
+
 async function main(): Promise<number> {
+    const argv = process.argv.slice(2);
+    if (argv[0] === 'config') return runConfigCommand(argv.slice(1));
+
     const { positionals, values } = parseArgs({
         allowPositionals: true,
         options: {
