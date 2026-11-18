@@ -13,7 +13,7 @@ import { installFromBuild } from './manifest.ts';
 import { detectHost, freeDiskBytes, isAsciiPath, isPortFree } from './platform.ts';
 import type { Host } from './platform.ts';
 import { randomPassword } from './database.ts';
-import { renderServerCfg } from './servercfg.ts';
+import { readCfgValue, renderServerCfg } from './servercfg.ts';
 import { InstallState, readPrivateJson, writePrivateJson } from './state.ts';
 import { licenseDirectives, parseLicense, readLicenseFile } from './license.ts';
 import type { InstallLicense } from './license.ts';
@@ -34,6 +34,7 @@ export type InstallOptions = {
 
 type LocalSecrets = {
     rconPassword?: string;
+    guardSalt?: string;
     database?: DatabaseSetup;
 };
 
@@ -190,6 +191,22 @@ async function writeServerCfg(layout: Layout, answers: Answers, host: Host, cont
         ? await answers.ask({ key: 'discordClientSecret', label: 'Discord : secret de l\'application', secret: true, optional: true })
         : '';
 
+    const locale = await answers.ask({
+        key: 'locale',
+        label: 'Langue du serveur (fr ou en)',
+        defaultValue: 'fr',
+        validate: (value) => (value === 'fr' || value === 'en' ? null : 'fr ou en'),
+    });
+    const coinshopWebhook = await answers.ask({
+        key: 'coinshopWebhook',
+        label: 'Webhook Discord des annonces de la boutique premium',
+        secret: true,
+        optional: true,
+        validate: (value) => (value === '' || /^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(value) ? null : 'adresse de webhook Discord attendue'),
+    });
+
+    const previousCfg = fs.existsSync(layout.serverCfg) ? fs.readFileSync(layout.serverCfg, 'utf8') : '';
+    secrets.guardSalt ??= readCfgValue(previousCfg, 'set px:guard_salt') || randomPassword();
     secrets.rconPassword ??= randomPassword();
     const template = fs.readFileSync(layout.serverCfgTemplate, 'utf8');
     const rendered = renderServerCfg(template, {
@@ -207,6 +224,9 @@ async function writeServerCfg(layout: Layout, answers: Answers, host: Host, cont
         botKey: '',
         rconPassword: secrets.rconPassword,
         oneSync: 'on',
+        guardSalt: secrets.guardSalt,
+        locale,
+        coinshopWebhook,
     }, layout.data, context.overrides);
     fs.writeFileSync(layout.serverCfg, rendered, { mode: 0o600 });
     log.ok('server.cfg écrit (il contient des secrets : ne le partage jamais)');

@@ -4,7 +4,7 @@ import { fxServerExecutable } from './fxserver.ts';
 import { layoutOf } from './layout.ts';
 import { log } from './log.ts';
 import { detectHost } from './platform.ts';
-import { readCfgValue } from './servercfg.ts';
+import { DEV_ONLY_CONVARS, hasDirective, readCfgValue } from './servercfg.ts';
 
 type Finding = { ok: boolean; text: string; fix?: string };
 
@@ -36,6 +36,14 @@ export function runDoctor(dir: string): number {
         for (const placeholder of PLACEHOLDERS) {
             if (cfg.includes(placeholder)) findings.push({ ok: false, text: `server.cfg contient encore « ${placeholder} »`, fix: 'Remplace la valeur, ou relance prax install --reconfigure.' });
         }
+        for (const convar of DEV_ONLY_CONVARS) {
+            const present = ['set', 'setr', 'sets'].some((command) => hasDirective(cfg, `${command} ${convar}`));
+            if (present) findings.push({ ok: false, text: `server.cfg contient ${convar}, réservé au développement de la base`, fix: 'Retire cette ligne : elle ouvre des outils de test aux joueurs.' });
+        }
+        const salt = readCfgValue(cfg, 'set px:guard_salt');
+        findings.push(salt && salt.length >= 16
+            ? { ok: true, text: 'Sel du guard renseigné' }
+            : { ok: false, text: 'px:guard_salt absent ou trop court', fix: 'Ajoute set px:guard_salt "<texte aléatoire de 32 caractères>" et ne le change plus ensuite.' });
         const key = readCfgValue(cfg, 'sv_licensekey');
         findings.push(key?.startsWith('cfxk_')
             ? { ok: true, text: 'Clé de licence Cfx renseignée' }

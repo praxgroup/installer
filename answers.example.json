@@ -11,6 +11,10 @@
   "maxClients": "48",
   "steamWebApiKey": "",
   "discordClientId": "",
+  "locale": "fr",
+  "coinshopWebhook": "",
+  "licenseKey": "",
+  "licenseSecret": "",
   "txAdminUser": "admin",
   "txAdminPassword": ""
 }
