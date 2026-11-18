@@ -1,0 +1,17 @@
+#!/bin/sh
+zero=0000000000000000000000000000000000000000
+while read local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in
+        refs/heads/main)
+            if [ "$local_sha" = "$zero" ]; then
+                echo "Push refusé : suppression de main interdite."
+                exit 1
+            fi
+            if [ "$remote_sha" != "$zero" ] && ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+                echo "Push refusé : force-push sur main interdit."
+                exit 1
+            fi
+            ;;
+    esac
+done
+exec node "$(git rev-parse --show-toplevel)/tools/audit.mjs"

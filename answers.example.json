@@ -1,0 +1,16 @@
+{
+  "dbMode": "existing",
+  "dbHost": "127.0.0.1",
+  "dbPort": "3306",
+  "dbName": "prax",
+  "dbUser": "prax",
+  "dbPassword": "",
+  "serverName": "Mon serveur Prax",
+  "cfxLicenseKey": "",
+  "owners": "license:",
+  "maxClients": "48",
+  "steamWebApiKey": "",
+  "discordClientId": "",
+  "txAdminUser": "admin",
+  "txAdminPassword": ""
+}
