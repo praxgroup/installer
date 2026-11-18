@@ -27,8 +27,14 @@ macOS : Cfx ne publie pas FXServer pour Mac. Il faut passer par l'image Docker.
 | Commande | Rôle |
 |---|---|
 | `prax install` | installe la base, FXServer, la base de données, `server.cfg` et txAdmin |
-| `prax doctor` | cherche ce qui empêche le serveur de démarrer |
+| `prax doctor` | cherche ce qui empêche le serveur de démarrer, réglages de `pconfig` compris |
+| `prax config get [chemin]` | valeur d'un réglage, sa valeur par défaut, son type et son aide ; sans chemin, la liste des réglages |
+| `prax config set <chemin> <valeur>` | modifie un réglage dans `pconfig`, après l'avoir vérifié avec le schéma de la base |
+| `prax config unset <chemin>` | remet un réglage à sa valeur par défaut |
+| `prax config check` | vérifie tous les réglages de `pconfig`, avec les mêmes messages que la base au démarrage |
 | `prax version` | affiche la version |
+
+`prax config` n'écrit jamais dans `pcore` : les réglages vont dans `pconfig`, qu'une mise à jour ne touche pas. Un chemin s'écrit comme en Lua (`Garage.transferFee`, `Garage.garages["Pillbox Hill"].label`, `Garage.defaultColors[2]`), une valeur aussi (`750`, `true`, `"texte"` ou `texte`, `vec3(1, 2, 3)` ou `1, 2, 3`, `{ label = "Garage" }`). Modifier un élément d'une liste écrit la liste entière dans `pconfig`, car une liste y est toujours remplacée en entier. Les commentaires d'un fichier de `pconfig` ne sont pas gardés quand `prax config` le réécrit : l'ancien fichier est copié en `.bak`.
 
 Une installation sans questions (hébergeurs, Docker) passe par un fichier de réponses (`--answers`, modèle dans `answers.example.json`) ou par des variables d'environnement `PRAX_*` (`PRAX_DB_HOST`, `PRAX_CFX_LICENSE_KEY`…), avec `--yes`.
 
