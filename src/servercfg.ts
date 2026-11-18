@@ -16,7 +16,12 @@ export type ServerCfgValues = {
     botKey: string;
     rconPassword: string;
     oneSync: 'on' | 'legacy' | 'off';
+    guardSalt: string;
+    locale: string;
+    coinshopWebhook: string;
 };
+
+export const DEV_ONLY_CONVARS = ['px:dev', 'px:loadtest', 'px:loadtest_token'];
 
 type Directive = { key: string; render: (values: ServerCfgValues) => string };
 
@@ -44,6 +49,9 @@ const DIRECTIVES: Directive[] = [
     { key: 'set px:bot_key', render: (v) => `set px:bot_key ${quote(v.botKey)}` },
     { key: 'rcon_password', render: (v) => `rcon_password ${quote(v.rconPassword)}` },
     { key: 'set onesync', render: (v) => `set onesync ${v.oneSync}` },
+    { key: 'set px:guard_salt', render: (v) => `set px:guard_salt ${quote(v.guardSalt)}` },
+    { key: 'setr px:locale', render: (v) => `setr px:locale ${quote(v.locale)}` },
+    { key: 'set px:coinshop_webhook', render: (v) => `set px:coinshop_webhook ${quote(v.coinshopWebhook)}` },
 ];
 
 const SET_COMMANDS = new Set(['set', 'sets', 'setr']);
@@ -69,6 +77,7 @@ export function renderServerCfg(template: string, values: ServerCfgValues, dataD
     for (const line of lines) {
         if (line.trim().startsWith('#')) continue;
         const key = directiveKey(line);
+        if (key && DEV_ONLY_CONVARS.some((convar) => key.endsWith(` ${convar}`))) continue;
         if (key === 'load_server_icon') {
             const icon = line.trim().split(/\s+/)[1]?.replace(/"/g, '') ?? '';
             if (!fs.existsSync(path.join(dataDir, icon))) continue;
