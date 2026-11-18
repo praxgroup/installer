@@ -20,6 +20,10 @@ export type ServerCfgValues = {
 
 type Directive = { key: string; render: (values: ServerCfgValues) => string };
 
+export function hasDirective(cfg: string, key: string): boolean {
+    return cfg.replace(/\r\n/g, '\n').split('\n').some((line) => directiveKey(line) === key);
+}
+
 function quote(value: string): string {
     return `"${value.replace(/["\r\n]/g, '')}"`;
 }
@@ -53,9 +57,13 @@ function directiveKey(line: string): string | null {
     return command;
 }
 
-export function renderServerCfg(template: string, values: ServerCfgValues, dataDir: string): string {
+export function renderServerCfg(template: string, values: ServerCfgValues, dataDir: string, overrides: string[] = []): string {
     const lines = template.replace(/\r\n/g, '\n').split('\n');
-    const pending = new Map(DIRECTIVES.map((directive) => [directive.key, directive]));
+    const pending = new Map<string, string>(DIRECTIVES.map((directive) => [directive.key, directive.render(values)]));
+    for (const line of overrides) {
+        const key = directiveKey(line);
+        if (key) pending.set(key, line.trim());
+    }
     const output: string[] = [];
 
     for (const line of lines) {
@@ -65,10 +73,10 @@ export function renderServerCfg(template: string, values: ServerCfgValues, dataD
             const icon = line.trim().split(/\s+/)[1]?.replace(/"/g, '') ?? '';
             if (!fs.existsSync(path.join(dataDir, icon))) continue;
         }
-        const directive = key ? pending.get(key) : undefined;
-        if (directive) {
-            output.push(directive.render(values));
-            pending.delete(directive.key);
+        const replacement = key ? pending.get(key) : undefined;
+        if (key && replacement !== undefined) {
+            output.push(replacement);
+            pending.delete(key);
             continue;
         }
         output.push(line);
@@ -76,9 +84,8 @@ export function renderServerCfg(template: string, values: ServerCfgValues, dataD
 
     if (pending.size > 0) {
         const firstEnsure = output.findIndex((line) => directiveKey(line) === 'ensure');
-        const missing = [...pending.values()].map((directive) => directive.render(values));
         const at = firstEnsure === -1 ? output.length : firstEnsure;
-        output.splice(at, 0, ...missing, '');
+        output.splice(at, 0, ...pending.values(), '');
     }
 
     return output.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\n*$/, '\n');

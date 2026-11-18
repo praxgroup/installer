@@ -15,7 +15,7 @@ export type Host = {
 export const DEFAULT_GAME_PORT = 30120;
 export const DEFAULT_TXADMIN_PORT = 40120;
 
-export function detectHost(): Host {
+export function detectHost(requestedGamePort: number | null = null): Host {
     let target: Target;
     if (process.platform === 'win32') target = 'windows';
     else if (process.platform === 'linux') target = 'linux';
@@ -40,7 +40,7 @@ export function detectHost(): Host {
     else if (fs.existsSync('/.dockerenv')) container = 'docker';
 
     const portFromHost = Number(process.env.SERVER_PORT);
-    const gamePort = Number.isInteger(portFromHost) && portFromHost > 0 ? portFromHost : DEFAULT_GAME_PORT;
+    const gamePort = requestedGamePort ?? (Number.isInteger(portFromHost) && portFromHost > 0 ? portFromHost : DEFAULT_GAME_PORT);
 
     return { target, container, gamePort };
 }

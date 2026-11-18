@@ -10,6 +10,7 @@ type Finding = { ok: boolean; text: string; fix?: string };
 
 const PLACEHOLDERS = ['CHANGE_ME', 'remplacer_par_votre_license'];
 const REQUIRED_RESOURCES = ['pdeps', 'pstreams', 'pconfig', 'pcore', 'pguard'];
+const ENSURED_RESOURCES = ['pdeps', 'pstreams', 'pcore', 'pguard'];
 
 export function runDoctor(dir: string): number {
     const layout = layoutOf(dir);
@@ -41,12 +42,15 @@ export function runDoctor(dir: string): number {
             : { ok: false, text: 'Clé de licence Cfx manquante', fix: 'Crée-la sur portal.cfx.re et mets-la dans sv_licensekey.' });
 
         const ensures = cfg.split('\n').map((line) => line.trim()).filter((line) => line.startsWith('ensure ')).map((line) => line.split(/\s+/)[1] ?? '');
-        const order = REQUIRED_RESOURCES.map((resource) => ensures.indexOf(resource));
-        const missing = REQUIRED_RESOURCES.filter((_, index) => order[index] === -1);
+        const order = ENSURED_RESOURCES.map((resource) => ensures.indexOf(resource));
+        const missing = ENSURED_RESOURCES.filter((_, index) => order[index] === -1);
+        const pconfigAt = ensures.indexOf('pconfig');
         if (missing.length > 0) {
-            findings.push({ ok: false, text: `server.cfg ne lance pas : ${missing.join(', ')}`, fix: 'Ajoute les lignes ensure dans l\'ordre pdeps, pstreams, pconfig, pcore, pguard.' });
+            findings.push({ ok: false, text: `server.cfg ne lance pas : ${missing.join(', ')}`, fix: 'Ajoute les lignes ensure dans l\'ordre pdeps, pstreams, pcore, pguard.' });
         } else if (order.some((position, index) => index > 0 && position < (order[index - 1] ?? -1))) {
-            findings.push({ ok: false, text: 'Ordre des ressources incorrect dans server.cfg', fix: 'Ordre attendu : pdeps, pstreams, pconfig, pcore, pguard.' });
+            findings.push({ ok: false, text: 'Ordre des ressources incorrect dans server.cfg', fix: 'Ordre attendu : pdeps, pstreams, pcore, pguard.' });
+        } else if (pconfigAt !== -1 && pconfigAt > ensures.indexOf('pcore')) {
+            findings.push({ ok: false, text: 'pconfig est lancé après pcore', fix: 'Mets ensure pconfig avant ensure pcore, ou retire la ligne : pcore le démarre de lui-même.' });
         } else {
             findings.push({ ok: true, text: 'Ordre des ressources correct' });
         }

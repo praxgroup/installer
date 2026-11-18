@@ -16,8 +16,12 @@ export type DatabaseSetup = {
 };
 
 const POOL_OPTIONS = 'maxIdle=5;idleTimeout=120000;keepAliveInitialDelay=30000';
-const SERVER_USER = 'prax';
-const READ_ONLY_USER = 'prax_readonly';
+const MAX_USER_LENGTH = 32;
+
+function userNamesFor(database: string): { server: string; readOnly: string } {
+    const base = database.slice(0, MAX_USER_LENGTH - '_readonly'.length);
+    return { server: `${base}_server`, readOnly: `${base}_readonly` };
+}
 
 export function randomPassword(): string {
     return crypto.randomBytes(24).toString('base64url');
@@ -62,27 +66,45 @@ function quoteIdentifier(value: string): string {
     return `\`${value}\``;
 }
 
-export async function createWithAdmin(admin: Omit<DatabaseAccess, 'database'>, database: string): Promise<DatabaseSetup> {
+async function userExists(connection: mysql.Connection, user: string): Promise<boolean> {
+    const [rows] = await connection.query('SELECT 1 FROM mysql.user WHERE User = ? LIMIT 1', [user]);
+    return (rows as unknown[]).length > 0;
+}
+
+export async function createWithAdmin(admin: Omit<DatabaseAccess, 'database'>, database: string, previous: DatabaseSetup | null): Promise<DatabaseSetup> {
     let connection: mysql.Connection | undefined;
     try {
         connection = await mysql.createConnection({ ...admin, connectTimeout: 8000 });
         const schema = quoteIdentifier(database);
+        const users = userNamesFor(database);
+        const base = { host: admin.host, port: admin.port, database };
+
+        const reusable = previous && previous.server.database === database && previous.server.user === users.server && previous.readOnly?.user === users.readOnly;
+        if (reusable && previous.readOnly) {
+            await testAccess(previous.server);
+            return previous;
+        }
+
+        for (const user of [users.server, users.readOnly]) {
+            if (await userExists(connection, user)) {
+                throw new InstallError(
+                    `L'utilisateur MariaDB « ${user} » existe déjà : l'installeur ne touche jamais à un utilisateur qu'il n'a pas créé.`,
+                    'Choisis un autre nom de base, ou réponds « existing » pour utiliser une base et un utilisateur déjà prêts.',
+                );
+            }
+        }
+
         const serverPassword = randomPassword();
         const readOnlyPassword = randomPassword();
-
         await connection.query(`CREATE DATABASE IF NOT EXISTS ${schema} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-        for (const [user, password] of [[SERVER_USER, serverPassword], [READ_ONLY_USER, readOnlyPassword]]) {
-            await connection.query('CREATE USER IF NOT EXISTS ?@? IDENTIFIED BY ?', [user, '%', password]);
-            await connection.query('ALTER USER ?@? IDENTIFIED BY ?', [user, '%', password]);
-        }
-        await connection.query(`GRANT ALL PRIVILEGES ON ${schema}.* TO ?@?`, [SERVER_USER, '%']);
-        await connection.query(`GRANT SELECT ON ${schema}.* TO ?@?`, [READ_ONLY_USER, '%']);
-        await connection.query('FLUSH PRIVILEGES');
+        await connection.query('CREATE USER ?@? IDENTIFIED BY ?', [users.server, '%', serverPassword]);
+        await connection.query('CREATE USER ?@? IDENTIFIED BY ?', [users.readOnly, '%', readOnlyPassword]);
+        await connection.query(`GRANT ALL PRIVILEGES ON ${schema}.* TO ?@?`, [users.server, '%']);
+        await connection.query(`GRANT SELECT ON ${schema}.* TO ?@?`, [users.readOnly, '%']);
 
-        const base = { host: admin.host, port: admin.port, database };
         return {
-            server: { ...base, user: SERVER_USER, password: serverPassword },
-            readOnly: { ...base, user: READ_ONLY_USER, password: readOnlyPassword },
+            server: { ...base, user: users.server, password: serverPassword },
+            readOnly: { ...base, user: users.readOnly, password: readOnlyPassword },
         };
     } catch (error) {
         if (error instanceof InstallError) throw error;

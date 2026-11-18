@@ -3,6 +3,7 @@ import { runDoctor } from './doctor.ts';
 import type { FxChannel } from './fxserver.ts';
 import { runInstall } from './install.ts';
 import { InstallError, log } from './log.ts';
+import { DEFAULT_TXADMIN_PORT } from './platform.ts';
 
 const VERSION = '0.1.0';
 
@@ -16,11 +17,20 @@ Utilisation :
 Options de prax install :
   --dir <dossier>        dossier d'installation (par défaut : ./prax-server)
   --from <dossier>       build local de la base (dossier build/<version> avec manifest.json)
+  --license <fichier>    fichier d'installation de l'espace client (licence et services premium)
   --answers <fichier>    réponses en JSON, pour une installation sans questions
   --yes                  ne pose aucune question (réponses par --answers ou variables PRAX_*)
   --fxserver <canal>     recommended (par défaut) ou latest
   --no-txadmin           démarrer FXServer directement, sans txAdmin
-  --reconfigure          refaire server.cfg même s'il existe`;
+  --reconfigure          refaire server.cfg même s'il existe
+  --game-port <port>     port du jeu (par défaut 30120, ou celui de l'hébergeur)
+  --txadmin-port <port>  port de txAdmin (par défaut 40120)`;
+
+function parsePort(value: string, option: string): number {
+    const port = Number(value);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new InstallError(`Port invalide pour ${option} : ${value}`);
+    return port;
+}
 
 async function main(): Promise<number> {
     const { positionals, values } = parseArgs({
@@ -33,6 +43,9 @@ async function main(): Promise<number> {
             fxserver: { type: 'string', default: 'recommended' },
             'no-txadmin': { type: 'boolean', default: false },
             reconfigure: { type: 'boolean', default: false },
+            'game-port': { type: 'string' },
+            license: { type: 'string' },
+            'txadmin-port': { type: 'string', default: String(DEFAULT_TXADMIN_PORT) },
             help: { type: 'boolean', short: 'h', default: false },
         },
     });
@@ -54,7 +67,12 @@ async function main(): Promise<number> {
         if (values.fxserver !== 'recommended' && values.fxserver !== 'latest') {
             throw new InstallError(`Canal FXServer inconnu : ${values.fxserver}`, 'Utilise recommended ou latest.');
         }
+        const gamePort = values['game-port'] === undefined ? null : parsePort(values['game-port'], '--game-port');
+        const txAdminPort = parsePort(values['txadmin-port'], '--txadmin-port');
         await runInstall({
+            gamePort,
+            txAdminPort,
+            licenseFile: values.license,
             dir: values.dir,
             from: values.from,
             answersFile: values.answers,

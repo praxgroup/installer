@@ -10,11 +10,13 @@ import type { Layout } from './layout.ts';
 import { writeLaunchScript } from './launch.ts';
 import { InstallError, log } from './log.ts';
 import { installFromBuild } from './manifest.ts';
-import { DEFAULT_TXADMIN_PORT, detectHost, freeDiskBytes, isAsciiPath, isPortFree } from './platform.ts';
+import { detectHost, freeDiskBytes, isAsciiPath, isPortFree } from './platform.ts';
 import type { Host } from './platform.ts';
 import { randomPassword } from './database.ts';
 import { renderServerCfg } from './servercfg.ts';
 import { InstallState, readPrivateJson, writePrivateJson } from './state.ts';
+import { licenseDirectives, parseLicense, readLicenseFile } from './license.ts';
+import type { InstallLicense } from './license.ts';
 import { prepareTxAdmin } from './txadmin.ts';
 
 export type InstallOptions = {
@@ -25,11 +27,14 @@ export type InstallOptions = {
     fxChannel: FxChannel;
     withTxAdmin: boolean;
     reconfigure: boolean;
+    gamePort: number | null;
+    txAdminPort: number;
+    licenseFile: string | undefined;
 };
 
 type LocalSecrets = {
     rconPassword?: string;
-    readOnlyDatabase?: DatabaseAccess | null;
+    database?: DatabaseSetup;
 };
 
 const MIN_FREE_BYTES = 3 * 1024 * 1024 * 1024;
@@ -76,7 +81,7 @@ async function installBase(layout: Layout, options: InstallOptions, state: Insta
     state.markDone('base', { version: manifest.version, commit: manifest.commit });
 }
 
-async function setupDatabase(answers: Answers, host: Host): Promise<DatabaseSetup> {
+async function setupDatabase(answers: Answers, host: Host, previous: DatabaseSetup | null): Promise<DatabaseSetup> {
     log.step('Base de données');
     const hostedByProvider = host.container !== null;
     const mode = await answers.ask({
@@ -105,13 +110,57 @@ async function setupDatabase(answers: Answers, host: Host): Promise<DatabaseSetu
     const adminUser = await answers.ask({ key: 'dbAdminUser', label: 'Compte administrateur de MariaDB', defaultValue: 'root', validate: notEmpty });
     const adminPassword = await answers.ask({ key: 'dbAdminPassword', label: 'Mot de passe administrateur', secret: true, optional: true });
     const database = await answers.ask({ key: 'dbName', label: 'Nom de la base à créer', defaultValue: 'prax', validate: notEmpty });
-    const setup = await createWithAdmin({ host: dbHost, port: dbPort, user: adminUser, password: adminPassword }, database);
+    const setup = await createWithAdmin({ host: dbHost, port: dbPort, user: adminUser, password: adminPassword }, database, previous);
     const version = await testAccess(setup.server);
     log.ok(`Base « ${database} » prête (${version}), utilisateur du serveur et utilisateur en lecture seule créés`);
     return setup;
 }
 
-async function writeServerCfg(layout: Layout, answers: Answers, host: Host, database: DatabaseSetup, secrets: LocalSecrets): Promise<void> {
+type CfgContext = {
+    database: DatabaseSetup | null;
+    overrides: string[];
+    discordProvided: boolean;
+};
+
+async function obtainLicense(options: InstallOptions, answers: Answers): Promise<InstallLicense | null> {
+    log.step('Licence Prax');
+    if (options.licenseFile) {
+        const license = readLicenseFile(path.resolve(options.licenseFile));
+        log.ok(`Licence ${license.plan === 'premium' ? 'premium' : 'standard'} : ${license.label}`);
+        if (license.premium?.panelUrl) log.ok(`Panel hébergé : ${license.premium.panelUrl}`);
+        return license;
+    }
+    const key = await answers.ask({
+        key: 'licenseKey',
+        label: 'Clé de licence Prax (PRAX-XXXX-…, dans ton espace client)',
+        optional: true,
+    });
+    if (!key) {
+        log.warn('Aucune licence : server.cfg sera fait sans elle, ajoute-la avant de lancer le serveur.');
+        return null;
+    }
+    const secret = await answers.ask({ key: 'licenseSecret', label: 'Secret de la licence', secret: true });
+    const license = parseLicense({ format: 1, license: { key, secret, plan: 'standard' } });
+    log.ok('Licence standard renseignée');
+    return license;
+}
+
+async function usesHostedDatabase(answers: Answers, host: Host, license: InstallLicense | null): Promise<boolean> {
+    if (!license?.premium?.hostedDatabase) return false;
+    log.step('Base de données');
+    log.info('Ta licence premium comprend une base de données hébergée par Prax.');
+    log.info("Elle n'accepte que l'adresse IP du serveur de production déclarée dans ton espace client.");
+    const production = await answers.confirm('Ce serveur est-il ton serveur de production', host.container !== null);
+    if (production) {
+        log.ok('Base hébergée par Prax utilisée');
+        log.warn("Vérifie dans ton espace client que l'IP déclarée est bien celle de ce serveur.");
+        return true;
+    }
+    log.info('Serveur de test : il aura sa propre base, la base hébergée reste réservée à la production.');
+    return false;
+}
+
+async function writeServerCfg(layout: Layout, answers: Answers, host: Host, context: CfgContext, secrets: LocalSecrets): Promise<void> {
     log.step('Configuration du serveur (server.cfg)');
     if (!fs.existsSync(layout.serverCfgTemplate)) {
         throw new InstallError('Le build ne contient pas server.cfg.example.', 'Refais le build avec release.bat.');
@@ -136,7 +185,7 @@ async function writeServerCfg(layout: Layout, answers: Answers, host: Host, data
         validate: (value) => (/^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 2048 ? null : 'entre 1 et 2048'),
     }));
     const steamWebApiKey = await answers.ask({ key: 'steamWebApiKey', label: 'Clé Steam Web API', secret: true, optional: true });
-    const discordClientId = await answers.ask({ key: 'discordClientId', label: 'Discord : identifiant de l\'application', optional: true });
+    const discordClientId = context.discordProvided ? '' : await answers.ask({ key: 'discordClientId', label: 'Discord : identifiant de l\'application', optional: true });
     const discordClientSecret = discordClientId
         ? await answers.ask({ key: 'discordClientSecret', label: 'Discord : secret de l\'application', secret: true, optional: true })
         : '';
@@ -144,7 +193,7 @@ async function writeServerCfg(layout: Layout, answers: Answers, host: Host, data
     secrets.rconPassword ??= randomPassword();
     const template = fs.readFileSync(layout.serverCfgTemplate, 'utf8');
     const rendered = renderServerCfg(template, {
-        connectionString: connectionString(database.server),
+        connectionString: context.database ? connectionString(context.database.server) : '',
         gamePort: host.gamePort,
         hostname,
         projectName: hostname,
@@ -158,7 +207,7 @@ async function writeServerCfg(layout: Layout, answers: Answers, host: Host, data
         botKey: '',
         rconPassword: secrets.rconPassword,
         oneSync: 'on',
-    }, layout.data);
+    }, layout.data, context.overrides);
     fs.writeFileSync(layout.serverCfg, rendered, { mode: 0o600 });
     log.ok('server.cfg écrit (il contient des secrets : ne le partage jamais)');
 }
@@ -182,7 +231,7 @@ async function setupTxAdmin(layout: Layout, answers: Answers): Promise<void> {
 
 export async function runInstall(options: InstallOptions): Promise<void> {
     const layout = layoutOf(options.dir);
-    const host = detectHost();
+    const host = detectHost(options.gamePort);
     const answers = new Answers(options.answersFile, options.interactive);
     const state = new InstallState(layout.state);
     const secrets = readPrivateJson<LocalSecrets>(layout.localSecrets) ?? {};
@@ -201,9 +250,17 @@ export async function runInstall(options: InstallOptions): Promise<void> {
         log.step('Configuration du serveur (server.cfg)');
         log.skip('server.cfg existe déjà : gardé tel quel (--reconfigure pour le refaire)');
     } else {
-        const database = await setupDatabase(answers, host);
-        secrets.readOnlyDatabase = database.readOnly;
-        await writeServerCfg(layout, answers, host, database, secrets);
+        const license = await obtainLicense(options, answers);
+        const hosted = await usesHostedDatabase(answers, host, license);
+        let database: DatabaseSetup | null = null;
+        if (!hosted) {
+            database = await setupDatabase(answers, host, secrets.database ?? null);
+            secrets.database = database;
+            writePrivateJson(layout.localSecrets, secrets);
+        }
+        const overrides = license ? licenseDirectives(license, { useHostedDatabase: hosted }) : [];
+        const discordProvided = overrides.some((line) => line.startsWith('set px:discord_client_id '));
+        await writeServerCfg(layout, answers, host, { database, overrides, discordProvided }, secrets);
         writePrivateJson(layout.localSecrets, secrets);
         state.markDone('servercfg');
     }
@@ -218,11 +275,11 @@ export async function runInstall(options: InstallOptions): Promise<void> {
         const script = writeLaunchScript(layout, {
             target: host.target,
             withTxAdmin: options.withTxAdmin,
-            txAdminPort: DEFAULT_TXADMIN_PORT,
-            forcedGamePort: host.container ? host.gamePort : null,
+            txAdminPort: options.txAdminPort,
+            forcedGamePort: host.container || options.gamePort ? host.gamePort : null,
         });
         log.info(`Lance ${script}`);
-        if (options.withTxAdmin) log.info(`Puis ouvre http://localhost:${DEFAULT_TXADMIN_PORT} et connecte-toi avec le compte txAdmin.`);
+        if (options.withTxAdmin) log.info(`Puis ouvre http://localhost:${options.txAdminPort} et connecte-toi avec le compte txAdmin.`);
         log.info(`En jeu : F8 puis « connect localhost:${host.gamePort} ».`);
     }
 
