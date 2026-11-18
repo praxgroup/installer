@@ -96,7 +96,39 @@ function auditFile(file, mode, errors) {
     }
 }
 
+const ALLOWED_AUTHOR_EMAIL = /^noreply@prax-studio\.fr$|^noreply@anthropic\.com$|^\d+\+github-actions\[bot\]@users\.noreply\.github\.com$/;
+
+function auditAuthors(range) {
+    const errors = [];
+    const log = git(['log', '--format=%h%x09%an%x09%ae%x09%cn%x09%ce%x09%B%x00', range]);
+    for (const record of log.split('\0').map((entry) => entry.trim()).filter(Boolean)) {
+        const [hash, authorName, authorEmail, committerName, committerEmail, ...message] = record.split('\t');
+        for (const email of [authorEmail, committerEmail]) {
+            if (!ALLOWED_AUTHOR_EMAIL.test(email)) errors.push(`commit ${hash} : adresse ${email} visible publiquement (git config user.email noreply@prax-studio.fr)`);
+        }
+        const identity = [authorName, authorEmail, committerName, committerEmail, message.join('\t')].join(' ');
+        for (const re of FORBIDDEN_NAMES) {
+            if (re.test(identity)) errors.push(`commit ${hash} : nom interdit dans l'auteur ou le message`);
+        }
+        for (const match of identity.matchAll(/[\w.+-]+@[\w-]+\.[\w.-]+/g)) {
+            if (!ALLOWED_AUTHOR_EMAIL.test(match[0])) errors.push(`commit ${hash} : adresse ${match[0]} dans le message`);
+        }
+    }
+    return errors;
+}
+
 function main() {
+    const authorsIndex = process.argv.indexOf('--authors');
+    if (authorsIndex !== -1) {
+        const errors = auditAuthors(process.argv[authorsIndex + 1]);
+        if (errors.length > 0) {
+            console.error(`Audit des commits : ${errors.length} erreur(s)`);
+            for (const error of errors) console.error(`  ${error}`);
+            process.exit(1);
+        }
+        console.log('Audit des commits : 0 erreur');
+        return;
+    }
     const mode = process.argv.includes('--staged') ? 'staged' : 'all';
     const files = listFiles(mode);
     const errors = [];
