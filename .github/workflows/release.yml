@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+      - run: npm ci
+      - run: node tools/audit.mjs
+      - run: npx tsc --noEmit
+
+  build:
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - run: npm ci
+      - run: bun build src/main.ts --compile --minify --target=bun-windows-x64 --outfile dist/prax-windows-x64.exe
+      - run: bun build src/main.ts --compile --minify --target=bun-linux-x64 --outfile dist/prax-linux-x64
+      - run: |
+          cd dist
+          for file in prax-windows-x64.exe prax-linux-x64; do
+            sha256sum "$file" > "$file.sha256"
+          done
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

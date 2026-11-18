@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.prax/
+.env
+.env.*
+.secrets/
+server.cfg
+*.pem
+*.key
+answers*.json
+!answers.example.json
