@@ -8,6 +8,7 @@ export type DatabaseAccess = {
     user: string;
     password: string;
     database: string;
+    tls?: boolean;
 };
 
 export type DatabaseSetup = {
@@ -16,6 +17,8 @@ export type DatabaseSetup = {
 };
 
 const POOL_OPTIONS = 'maxIdle=5;idleTimeout=120000;keepAliveInitialDelay=30000';
+const POOL_QUERY = 'charset=utf8mb4&maxIdle=5&idleTimeout=120000&keepAliveInitialDelay=30000';
+const TLS_OPTIONS = { rejectUnauthorized: false };
 const MAX_USER_LENGTH = 32;
 
 function userNamesFor(database: string): { server: string; readOnly: string } {
@@ -35,6 +38,10 @@ export function connectionString(access: DatabaseAccess): string {
     for (const [label, value] of [['Le nom de la base', access.database], ["L'utilisateur", access.user], ['Le mot de passe', access.password]] as const) {
         assertConnectionValue(label, value);
     }
+    if (access.tls) {
+        const credentials = `${encodeURIComponent(access.user)}:${encodeURIComponent(access.password)}`;
+        return `mysql://${credentials}@${access.host}:${access.port}/${access.database}?${POOL_QUERY}&ssl={\\"rejectUnauthorized\\":false}`;
+    }
     const server = access.port === 3306 ? access.host : `${access.host};port=${access.port}`;
     return `server=${server};database=${access.database};userid=${access.user};password=${access.password};${POOL_OPTIONS}`;
 }
@@ -48,12 +55,29 @@ function explain(error: unknown, access: { host: string; port: number }): Instal
     return new InstallError(`Connexion à la base impossible : ${(error as Error).message}`);
 }
 
-export async function testAccess(access: DatabaseAccess): Promise<string> {
+function isTlsUnsupported(error: unknown): boolean {
+    return /does not support secure|SSL is required|HANDSHAKE_NO_SSL_SUPPORT/i.test(`${(error as { code?: string }).code ?? ''} ${(error as Error).message ?? ''}`);
+}
+
+async function openConnection(access: Omit<DatabaseAccess, 'database'> & { database?: string }): Promise<{ connection: mysql.Connection; tls: boolean }> {
+    const { tls, ...options } = access;
+    const base = { ...options, connectTimeout: 8000 };
+    if (tls === false) return { connection: await mysql.createConnection(base), tls: false };
+    try {
+        return { connection: await mysql.createConnection({ ...base, ssl: TLS_OPTIONS }), tls: true };
+    } catch (error) {
+        if (tls === true || !isTlsUnsupported(error)) throw error;
+        return { connection: await mysql.createConnection(base), tls: false };
+    }
+}
+
+export async function testAccess(access: DatabaseAccess): Promise<{ version: string; tls: boolean }> {
     let connection: mysql.Connection | undefined;
     try {
-        connection = await mysql.createConnection({ ...access, connectTimeout: 8000 });
+        const opened = await openConnection(access);
+        connection = opened.connection;
         const [rows] = await connection.query('SELECT VERSION() AS version');
-        return String((rows as Array<{ version: string }>)[0]?.version ?? 'inconnue');
+        return { version: String((rows as Array<{ version: string }>)[0]?.version ?? 'inconnue'), tls: opened.tls };
     } catch (error) {
         throw explain(error, access);
     } finally {
@@ -74,10 +98,11 @@ async function userExists(connection: mysql.Connection, user: string): Promise<b
 export async function createWithAdmin(admin: Omit<DatabaseAccess, 'database'>, database: string, previous: DatabaseSetup | null): Promise<DatabaseSetup> {
     let connection: mysql.Connection | undefined;
     try {
-        connection = await mysql.createConnection({ ...admin, connectTimeout: 8000 });
+        const opened = await openConnection(admin);
+        connection = opened.connection;
         const schema = quoteIdentifier(database);
         const users = userNamesFor(database);
-        const base = { host: admin.host, port: admin.port, database };
+        const base = { host: admin.host, port: admin.port, database, tls: opened.tls };
 
         const reusable = previous && previous.server.database === database && previous.server.user === users.server && previous.readOnly?.user === users.readOnly;
         if (reusable && previous.readOnly) {

@@ -19,7 +19,6 @@ export type Manifest = {
     files: ManifestFile[];
 };
 
-const TEMPLATE_FILES = new Set(['server.cfg.example']);
 
 function isSafeRelativePath(value: string): boolean {
     if (value.includes('\\') || value.startsWith('/') || /^[a-z]:/i.test(value)) return false;
@@ -43,7 +42,7 @@ export function readManifest(buildDir: string): Manifest {
 }
 
 export function destinationOf(layout: Layout, relative: string): string {
-    if (TEMPLATE_FILES.has(relative)) return path.join(layout.data, relative);
+    if (!relative.includes('/')) return path.join(layout.data, relative);
     return path.join(layout.resources, ...relative.split('/'));
 }
 

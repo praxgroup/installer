@@ -103,8 +103,9 @@ async function setupDatabase(answers: Answers, host: Host, previous: DatabaseSet
             user: await answers.ask({ key: 'dbUser', label: 'Utilisateur', validate: notEmpty }),
             password: await answers.ask({ key: 'dbPassword', label: 'Mot de passe', secret: true, optional: true }),
         };
-        const version = await testAccess(access);
-        log.ok(`Connexion réussie (${version})`);
+        const { version, tls } = await testAccess(access);
+        access.tls = tls;
+        log.ok(`Connexion réussie (${version}${tls ? ', chiffrée en TLS' : ''})`);
         return { server: access, readOnly: null };
     }
 
@@ -112,8 +113,8 @@ async function setupDatabase(answers: Answers, host: Host, previous: DatabaseSet
     const adminPassword = await answers.ask({ key: 'dbAdminPassword', label: 'Mot de passe administrateur', secret: true, optional: true });
     const database = await answers.ask({ key: 'dbName', label: 'Nom de la base à créer', defaultValue: 'prax', validate: notEmpty });
     const setup = await createWithAdmin({ host: dbHost, port: dbPort, user: adminUser, password: adminPassword }, database, previous);
-    const version = await testAccess(setup.server);
-    log.ok(`Base « ${database} » prête (${version}), utilisateur du serveur et utilisateur en lecture seule créés`);
+    const { version, tls } = await testAccess(setup.server);
+    log.ok(`Base « ${database} » prête (${version}${tls ? ', chiffrée en TLS' : ''}), utilisateur du serveur et utilisateur en lecture seule créés`);
     return setup;
 }
 
@@ -121,7 +122,10 @@ type CfgContext = {
     database: DatabaseSetup | null;
     overrides: string[];
     discordProvided: boolean;
+    withTxAdmin: boolean;
 };
+
+type CfgIdentity = { hostname: string; locale: string };
 
 async function obtainLicense(options: InstallOptions, answers: Answers): Promise<InstallLicense | null> {
     log.step('Licence Prax');
@@ -161,7 +165,7 @@ async function usesHostedDatabase(answers: Answers, host: Host, license: Install
     return false;
 }
 
-async function writeServerCfg(layout: Layout, answers: Answers, host: Host, context: CfgContext, secrets: LocalSecrets): Promise<void> {
+async function writeServerCfg(layout: Layout, answers: Answers, host: Host, context: CfgContext, secrets: LocalSecrets): Promise<CfgIdentity> {
     log.step('Configuration du serveur (server.cfg)');
     if (!fs.existsSync(layout.serverCfgTemplate)) {
         throw new InstallError('Le build ne contient pas server.cfg.example.', 'Refais le build avec release.bat.');
@@ -223,16 +227,17 @@ async function writeServerCfg(layout: Layout, answers: Answers, host: Host, cont
         discordClientSecret,
         botKey: '',
         rconPassword: secrets.rconPassword,
-        oneSync: 'on',
+        oneSync: context.withTxAdmin ? null : 'on',
         guardSalt: secrets.guardSalt,
         locale,
         coinshopWebhook,
     }, layout.data, context.overrides);
     fs.writeFileSync(layout.serverCfg, rendered, { mode: 0o600 });
     log.ok('server.cfg écrit (il contient des secrets : ne le partage jamais)');
+    return { hostname, locale };
 }
 
-async function setupTxAdmin(layout: Layout, answers: Answers): Promise<void> {
+async function setupTxAdmin(layout: Layout, answers: Answers, identity: CfgIdentity): Promise<void> {
     log.step('txAdmin');
     const adminName = await answers.ask({
         key: 'txAdminUser',
@@ -246,7 +251,7 @@ async function setupTxAdmin(layout: Layout, answers: Answers): Promise<void> {
         secret: true,
         validate: (value) => (value.length >= 12 ? null : '12 caractères au moins'),
     });
-    prepareTxAdmin(layout, { adminName, adminPassword, oneSync: 'on' });
+    prepareTxAdmin(layout, { adminName, adminPassword, oneSync: 'on', serverName: identity.hostname, language: identity.locale });
 }
 
 export async function runInstall(options: InstallOptions): Promise<void> {
@@ -266,6 +271,11 @@ export async function runInstall(options: InstallOptions): Promise<void> {
     state.markDone('fxserver', { build: fx.build });
 
     const cfgExists = fs.existsSync(layout.serverCfg);
+    let identity: CfgIdentity = { hostname: 'Prax', locale: 'fr' };
+    if (cfgExists) {
+        const current = fs.readFileSync(layout.serverCfg, 'utf8');
+        identity = { hostname: readCfgValue(current, 'sv_hostname') ?? 'Prax', locale: readCfgValue(current, 'setr px:locale') ?? 'fr' };
+    }
     if (cfgExists && !options.reconfigure) {
         log.step('Configuration du serveur (server.cfg)');
         log.skip('server.cfg existe déjà : gardé tel quel (--reconfigure pour le refaire)');
@@ -280,13 +290,13 @@ export async function runInstall(options: InstallOptions): Promise<void> {
         }
         const overrides = license ? licenseDirectives(license, { useHostedDatabase: hosted }) : [];
         const discordProvided = overrides.some((line) => line.startsWith('set px:discord_client_id '));
-        await writeServerCfg(layout, answers, host, { database, overrides, discordProvided }, secrets);
+        identity = await writeServerCfg(layout, answers, host, { database, overrides, discordProvided, withTxAdmin: options.withTxAdmin }, secrets);
         writePrivateJson(layout.localSecrets, secrets);
         state.markDone('servercfg');
     }
 
     if (options.withTxAdmin) {
-        await setupTxAdmin(layout, answers);
+        await setupTxAdmin(layout, answers, identity);
         state.markDone('txadmin');
     }
 
