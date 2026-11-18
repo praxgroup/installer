@@ -56,3 +56,7 @@ npm run audit
 `npm run setup` installe les hooks git : l'audit tourne à chaque commit et à chaque push. Il refuse tout fichier de la base, tout secret, toute adresse IP publique et tout commentaire dans le code.
 
 Les versions sont publiées par GitHub Actions à chaque tag `vX.Y.Z` : exécutables compilés avec Bun et leurs empreintes.
+
+## Licence
+
+Tous droits réservés (voir [LICENSE](LICENSE)). Le code est public pour être relu. On peut lancer le programme pour installer la base Prax, et un hébergeur peut proposer l'installation à ses clients sans la modifier. Tout autre usage demande l'accord écrit de Prax Studio.
