@@ -12,6 +12,8 @@ export type TxAdminSetup = {
     adminName: string;
     adminPassword: string;
     oneSync: 'on' | 'legacy' | 'off';
+    serverName: string;
+    language: string;
 };
 
 function writeIfMissing(file: string, content: string, label: string): void {
@@ -27,6 +29,10 @@ function writeIfMissing(file: string, content: string, label: string): void {
 export function prepareTxAdmin(layout: Layout, setup: TxAdminSetup): void {
     const config = {
         version: TXADMIN_CONFIG_VERSION,
+        general: {
+            serverName: setup.serverName.replace(/[^ -~]/g, '').slice(0, 18) || 'Prax',
+            language: setup.language,
+        },
         server: {
             dataPath: layout.data,
             cfgPath: 'server.cfg',

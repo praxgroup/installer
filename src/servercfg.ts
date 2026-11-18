@@ -15,7 +15,7 @@ export type ServerCfgValues = {
     discordClientSecret: string;
     botKey: string;
     rconPassword: string;
-    oneSync: 'on' | 'legacy' | 'off';
+    oneSync: 'on' | 'legacy' | 'off' | null;
     guardSalt: string;
     locale: string;
     coinshopWebhook: string;
@@ -23,7 +23,7 @@ export type ServerCfgValues = {
 
 export const DEV_ONLY_CONVARS = ['px:dev', 'px:loadtest', 'px:loadtest_token'];
 
-type Directive = { key: string; render: (values: ServerCfgValues) => string };
+type Directive = { key: string; render: (values: ServerCfgValues) => string | null };
 
 export function hasDirective(cfg: string, key: string): boolean {
     return cfg.replace(/\r\n/g, '\n').split('\n').some((line) => directiveKey(line) === key);
@@ -34,7 +34,7 @@ function quote(value: string): string {
 }
 
 const DIRECTIVES: Directive[] = [
-    { key: 'set mysql_connection_string', render: (v) => `set mysql_connection_string ${quote(v.connectionString)}` },
+    { key: 'set mysql_connection_string', render: (v) => `set mysql_connection_string "${v.connectionString.replace(/[\r\n]/g, '')}"` },
     { key: 'endpoint_add_tcp', render: (v) => `endpoint_add_tcp "0.0.0.0:${v.gamePort}"` },
     { key: 'endpoint_add_udp', render: (v) => `endpoint_add_udp "0.0.0.0:${v.gamePort}"` },
     { key: 'sv_hostname', render: (v) => `sv_hostname ${quote(v.hostname)}` },
@@ -48,7 +48,7 @@ const DIRECTIVES: Directive[] = [
     { key: 'set px:discord_client_secret', render: (v) => `set px:discord_client_secret ${quote(v.discordClientSecret)}` },
     { key: 'set px:bot_key', render: (v) => `set px:bot_key ${quote(v.botKey)}` },
     { key: 'rcon_password', render: (v) => `rcon_password ${quote(v.rconPassword)}` },
-    { key: 'set onesync', render: (v) => `set onesync ${v.oneSync}` },
+    { key: 'set onesync', render: (v) => (v.oneSync ? `set onesync ${v.oneSync}` : null) },
     { key: 'set px:guard_salt', render: (v) => `set px:guard_salt ${quote(v.guardSalt)}` },
     { key: 'setr px:locale', render: (v) => `setr px:locale ${quote(v.locale)}` },
     { key: 'set px:coinshop_webhook', render: (v) => `set px:coinshop_webhook ${quote(v.coinshopWebhook)}` },
@@ -67,7 +67,13 @@ function directiveKey(line: string): string | null {
 
 export function renderServerCfg(template: string, values: ServerCfgValues, dataDir: string, overrides: string[] = []): string {
     const lines = template.replace(/\r\n/g, '\n').split('\n');
-    const pending = new Map<string, string>(DIRECTIVES.map((directive) => [directive.key, directive.render(values)]));
+    const pending = new Map<string, string>();
+    const removed = new Set<string>();
+    for (const directive of DIRECTIVES) {
+        const rendered = directive.render(values);
+        if (rendered === null) removed.add(directive.key);
+        else pending.set(directive.key, rendered);
+    }
     for (const line of overrides) {
         const key = directiveKey(line);
         if (key) pending.set(key, line.trim());
@@ -78,6 +84,7 @@ export function renderServerCfg(template: string, values: ServerCfgValues, dataD
         if (line.trim().startsWith('#')) continue;
         const key = directiveKey(line);
         if (key && DEV_ONLY_CONVARS.some((convar) => key.endsWith(` ${convar}`))) continue;
+        if (key && removed.has(key)) continue;
         if (key === 'load_server_icon') {
             const icon = line.trim().split(/\s+/)[1]?.replace(/"/g, '') ?? '';
             if (!fs.existsSync(path.join(dataDir, icon))) continue;
