@@ -26,7 +26,7 @@ macOS : Cfx ne publie pas FXServer pour Mac. Il faut passer par l'image Docker.
 
 | Commande | Rôle |
 |---|---|
-| `prax install` | installe la base, FXServer, la base de données, `server.cfg` et txAdmin |
+| `prax install` | se connecte au compte client (code à entrer sur prax-studio.fr, ou jeton `--token` / `PRAX_INSTALL_TOKEN`), télécharge la base et installe FXServer, la base de données, `server.cfg` et txAdmin |
 | `prax doctor` | cherche ce qui empêche le serveur de démarrer, réglages de `pconfig` compris |
 | `prax config get [chemin]` | valeur d'un réglage, sa valeur par défaut, son type et son aide ; sans chemin, la liste des réglages |
 | `prax config set <chemin> <valeur>` | modifie un réglage dans `pconfig`, après l'avoir vérifié avec le schéma de la base |
