@@ -137,7 +137,7 @@ export function installAutostart(layout: Layout, target: Target, script: string)
         log.warn("systemd est absent : ajoute toi-même le lancement de start.sh au démarrage de la machine.");
         return null;
     }
-    const name = `prax-${slug}`;
+    const name = slug.startsWith('prax') ? slug : `prax-${slug}`;
     const unitFile = `/etc/systemd/system/${name}.service`;
     if (!elevated) {
         log.warn('Le service systemd demande les droits root. Relance prax install avec sudo, ou crée-le toi-même :');

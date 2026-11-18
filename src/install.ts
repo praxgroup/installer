@@ -8,7 +8,7 @@ import type { DatabaseAccess, DatabaseSetup } from './database.ts';
 import { installPortable, installSystemPackage, socketRunner, systemPort, windowsStartLines } from './mariadb.ts';
 import type { PortableMariaDb } from './mariadb.ts';
 import { installAutostart, isElevated, missingResources, openFirewall, startServer, waitOnline } from './system.ts';
-import type { FirewallPort } from './system.ts';
+import type { Autostart, FirewallPort } from './system.ts';
 import { installFxServer, resolveBuild } from './fxserver.ts';
 import type { FxChannel } from './fxserver.ts';
 import { layoutOf } from './layout.ts';
@@ -88,12 +88,7 @@ async function connectAccount(options: InstallOptions, answers: Answers): Promis
     const site = resolveSite(options.site);
     const token = options.installToken ?? process.env.PRAX_INSTALL_TOKEN;
     if (token) return connectWithToken(site, token);
-    if (!answers.canPrompt) {
-        throw new InstallError(
-            'Sans questions (--yes), la connexion au compte client passe par un jeton d\'installation.',
-            'Crée-le dans ton espace client, page Installer, puis donne-le avec --token ou la variable PRAX_INSTALL_TOKEN.',
-        );
-    }
+    if (!answers.canPrompt) log.info('Aucun jeton d\'installation (--token ou PRAX_INSTALL_TOKEN) : connexion par code, à entrer sur la page Installer du site.');
     return connectWithCode(site);
 }
 
@@ -294,6 +289,10 @@ async function writeServerCfg(layout: Layout, answers: Answers, host: Host, cont
 
 async function setupTxAdmin(layout: Layout, answers: Answers, identity: CfgIdentity): Promise<void> {
     log.step('txAdmin');
+    if (fs.existsSync(path.join(layout.txData, 'admins.json')) && fs.existsSync(path.join(layout.txData, 'default', 'config.json'))) {
+        log.skip('txAdmin déjà préparé : profil et compte admin gardés');
+        return;
+    }
     const adminName = await answers.ask({
         key: 'txAdminUser',
         label: 'Nom du compte admin txAdmin',
@@ -365,7 +364,7 @@ export async function runInstall(options: InstallOptions): Promise<void> {
             forcedGamePort: host.container || options.gamePort ? host.gamePort : null,
             preStart: host.target === 'windows' && secrets.mariadb ? windowsStartLines(layout, secrets.mariadb) : [],
         });
-        if (host.container === null) await setupMachine(layout, answers, host, options, script);
+        if (host.container === null) await setupMachine(layout, answers, host, options, script, state);
         else log.info(`Lance ${script}`);
     }
 
@@ -375,7 +374,12 @@ export async function runInstall(options: InstallOptions): Promise<void> {
     log.info(`En jeu : F8 puis « connect localhost:${host.gamePort} ».`);
 }
 
-async function setupMachine(layout: Layout, answers: Answers, host: Host, options: InstallOptions, script: string): Promise<void> {
+async function machineSetup(layout: Layout, answers: Answers, host: Host, options: InstallOptions, script: string, state: InstallState): Promise<Autostart | null> {
+    if (state.isDone('machine')) {
+        const saved = state.details('machine');
+        log.skip('Pare-feu et démarrage automatique déjà réglés : gardés tels quels');
+        return saved.autostartKind ? { kind: saved.autostartKind as Autostart['kind'], name: saved.autostartName ?? '' } : null;
+    }
     const elevated = isElevated(host.target);
     const ports: FirewallPort[] = [];
     if (await answers.confirm(`Ouvrir le port ${host.gamePort} dans le pare-feu, pour que les joueurs puissent se connecter`, true, 'openFirewall')) {
@@ -389,6 +393,12 @@ async function setupMachine(layout: Layout, answers: Answers, host: Host, option
     const autostart = (await answers.confirm('Démarrer le serveur automatiquement avec la machine', elevated, 'autostart'))
         ? installAutostart(layout, host.target, script)
         : null;
+    state.markDone('machine', autostart ? { autostartKind: autostart.kind, autostartName: autostart.name } : {});
+    return autostart;
+}
+
+async function setupMachine(layout: Layout, answers: Answers, host: Host, options: InstallOptions, script: string, state: InstallState): Promise<void> {
+    const autostart = await machineSetup(layout, answers, host, options, script, state);
 
     if (!(await answers.confirm('Lancer le serveur maintenant', true, 'startNow'))) {
         log.info(`Pour le lancer plus tard : ${script}`);
