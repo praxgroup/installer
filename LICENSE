@@ -1,0 +1,13 @@
+Copyright (c) 2026 Prax Studio. Tous droits réservés.
+
+Le code de ce dépôt est publié pour pouvoir être relu. Il n'est pas sous licence libre.
+
+Ce qui est permis, sans autre accord :
+- exécuter le programme prax, les scripts d'installation, l'egg et l'image Docker publiés ici, pour installer et configurer la base Prax ;
+- pour un hébergeur, proposer cet egg, cette image ou cette recette à ses clients, sans les modifier.
+
+Ce qui est interdit sans accord écrit de Prax Studio : copier, modifier, redistribuer ou réutiliser tout ou partie de ce code dans un autre projet.
+
+Le programme est fourni tel quel, sans garantie.
+
+All rights reserved. This code is published for review only. You may run the published program, scripts, egg and Docker image to install the Prax base, and hosting providers may offer them unmodified to their customers. Any other copy, modification, redistribution or reuse requires written permission from Prax Studio.
