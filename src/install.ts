@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Answers } from './answers.ts';
+import { connectWithCode, connectWithToken, installFromSite, resolveSite } from './account.ts';
+import type { SiteSession } from './account.ts';
 import { connectionString, createWithAdmin, explainDatabaseError, provisionDatabase, testAccess } from './database.ts';
 import type { DatabaseAccess, DatabaseSetup } from './database.ts';
 import { installPortable, installSystemPackage, socketRunner, systemPort, windowsStartLines } from './mariadb.ts';
@@ -35,6 +37,9 @@ export type InstallOptions = {
     txAdminPort: number;
     licenseFile: string | undefined;
     mariadbFrom: string | undefined;
+    site: string | undefined;
+    installToken: string | undefined;
+    version: string | undefined;
 };
 
 type LocalSecrets = {
@@ -79,16 +84,23 @@ async function checkSystem(layout: Layout, host: Host): Promise<void> {
     }
 }
 
-async function installBase(layout: Layout, options: InstallOptions, state: InstallState): Promise<void> {
-    log.step('Base Prax');
-    if (!options.from) {
+async function connectAccount(options: InstallOptions, answers: Answers): Promise<SiteSession> {
+    const site = resolveSite(options.site);
+    const token = options.installToken ?? process.env.PRAX_INSTALL_TOKEN;
+    if (token) return connectWithToken(site, token);
+    if (!answers.canPrompt) {
         throw new InstallError(
-            'Le téléchargement par le compte client arrive bientôt.',
-            'Pour l\'instant, indique le dossier d\'un build avec --from <dossier build/<version>>.',
+            'Sans questions (--yes), la connexion au compte client passe par un jeton d\'installation.',
+            'Crée-le dans ton espace client, page Installer, puis donne-le avec --token ou la variable PRAX_INSTALL_TOKEN.',
         );
     }
-    const manifest = await installFromBuild(layout, path.resolve(options.from));
-    state.markDone('base', { version: manifest.version, commit: manifest.commit });
+    return connectWithCode(site);
+}
+
+async function installBase(layout: Layout, options: InstallOptions, state: InstallState, session: SiteSession | null): Promise<void> {
+    log.step('Base Prax');
+    const manifest = session ? await installFromSite(layout, session, options.version) : await installFromBuild(layout, path.resolve(options.from as string));
+    state.markDone('base', { version: manifest.version, commit: manifest.commit, source: session ? new URL(session.site).host : 'build local' });
 }
 
 async function defaultDatabaseMode(host: Host): Promise<'install' | 'create' | 'existing'> {
@@ -170,10 +182,10 @@ type CfgContext = {
 
 type CfgIdentity = { hostname: string; locale: string };
 
-async function obtainLicense(options: InstallOptions, answers: Answers): Promise<InstallLicense | null> {
+async function obtainLicense(options: InstallOptions, answers: Answers, session: SiteSession | null): Promise<InstallLicense | null> {
     log.step('Licence Prax');
-    if (options.licenseFile) {
-        const license = readLicenseFile(path.resolve(options.licenseFile));
+    if (options.licenseFile || session) {
+        const license = options.licenseFile ? readLicenseFile(path.resolve(options.licenseFile)) : (session as SiteSession).license;
         log.ok(`Licence ${license.plan === 'premium' ? 'premium' : 'standard'} : ${license.label}`);
         if (license.premium?.panelUrl) log.ok(`Panel hébergé : ${license.premium.panelUrl}`);
         return license;
@@ -306,7 +318,8 @@ export async function runInstall(options: InstallOptions): Promise<void> {
 
     log.title(`Installation de la base Prax dans ${layout.root}`);
     await checkSystem(layout, host);
-    await installBase(layout, options, state);
+    const session = options.from ? null : await connectAccount(options, answers);
+    await installBase(layout, options, state, session);
 
     log.step('FXServer');
     const fx = await resolveBuild(host.target, options.fxChannel);
@@ -323,7 +336,7 @@ export async function runInstall(options: InstallOptions): Promise<void> {
         log.step('Configuration du serveur (server.cfg)');
         log.skip('server.cfg existe déjà : gardé tel quel (--reconfigure pour le refaire)');
     } else {
-        const license = await obtainLicense(options, answers);
+        const license = await obtainLicense(options, answers, session);
         const hosted = await usesHostedDatabase(answers, host, license);
         let database: DatabaseSetup | null = null;
         if (!hosted) {

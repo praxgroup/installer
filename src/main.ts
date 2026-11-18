@@ -18,7 +18,10 @@ Utilisation :
 
 Options de prax install :
   --dir <dossier>        dossier d'installation (par défaut : ./prax-server)
-  --from <dossier>       build local de la base (dossier build/<version> avec manifest.json)
+  --from <dossier>       build local de la base (dossier build/<version> avec manifest.json), au lieu de la télécharger
+  --token <jeton>        jeton d'installation de l'espace client (sinon : code à entrer sur le site)
+  --version <X.Y.Z>      version de la base à installer (par défaut : la dernière)
+  --site <adresse>       site Prax (par défaut : https://prax-studio.fr)
   --license <fichier>    fichier d'installation de l'espace client (licence et services premium)
   --answers <fichier>    réponses en JSON, pour une installation sans questions
   --yes                  ne pose aucune question (réponses par --answers ou variables PRAX_*)
@@ -73,6 +76,9 @@ async function main(): Promise<number> {
             'game-port': { type: 'string' },
             license: { type: 'string' },
             'mariadb-from': { type: 'string' },
+            token: { type: 'string' },
+            version: { type: 'string' },
+            site: { type: 'string' },
             'txadmin-port': { type: 'string', default: String(DEFAULT_TXADMIN_PORT) },
             help: { type: 'boolean', short: 'h', default: false },
         },
@@ -102,6 +108,9 @@ async function main(): Promise<number> {
             txAdminPort,
             licenseFile: values.license,
             mariadbFrom: values['mariadb-from'],
+            installToken: values.token,
+            version: values.version,
+            site: values.site,
             dir: values.dir,
             from: values.from,
             answersFile: values.answers,
