@@ -1,8 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Answers } from './answers.ts';
-import { connectionString, createWithAdmin, testAccess } from './database.ts';
+import { connectionString, createWithAdmin, explainDatabaseError, provisionDatabase, testAccess } from './database.ts';
 import type { DatabaseAccess, DatabaseSetup } from './database.ts';
+import { installPortable, installSystemPackage, socketRunner, systemPort, windowsStartLines } from './mariadb.ts';
+import type { PortableMariaDb } from './mariadb.ts';
+import { installAutostart, isElevated, missingResources, openFirewall, startServer, waitOnline } from './system.ts';
+import type { FirewallPort } from './system.ts';
 import { installFxServer, resolveBuild } from './fxserver.ts';
 import type { FxChannel } from './fxserver.ts';
 import { layoutOf } from './layout.ts';
@@ -30,13 +34,18 @@ export type InstallOptions = {
     gamePort: number | null;
     txAdminPort: number;
     licenseFile: string | undefined;
+    mariadbFrom: string | undefined;
 };
 
 type LocalSecrets = {
     rconPassword?: string;
     guardSalt?: string;
     database?: DatabaseSetup;
+    mariadb?: PortableMariaDb;
 };
+
+const LOCAL_DB_PORT = 3306;
+const PROGRESS_EVERY_SECONDS = 15;
 
 const MIN_FREE_BYTES = 3 * 1024 * 1024 * 1024;
 
@@ -82,15 +91,49 @@ async function installBase(layout: Layout, options: InstallOptions, state: Insta
     state.markDone('base', { version: manifest.version, commit: manifest.commit });
 }
 
-async function setupDatabase(answers: Answers, host: Host, previous: DatabaseSetup | null): Promise<DatabaseSetup> {
+async function defaultDatabaseMode(host: Host): Promise<'install' | 'create' | 'existing'> {
+    if (host.container !== null) return 'existing';
+    return (await isPortFree(LOCAL_DB_PORT, false)) ? 'install' : 'create';
+}
+
+async function installLocalDatabase(layout: Layout, answers: Answers, host: Host, secrets: LocalSecrets, options: InstallOptions): Promise<DatabaseSetup> {
+    const database = await answers.ask({ key: 'dbName', label: 'Nom de la base à créer', defaultValue: 'prax', validate: notEmpty });
+    const previous = secrets.database ?? null;
+    let setup: DatabaseSetup;
+    if (host.target === 'windows') {
+        log.info('MariaDB sera installé dans le dossier du serveur, sans rien installer dans Windows, et lancé par start.bat.');
+        const portable = await installPortable(layout, secrets.mariadb, options.mariadbFrom);
+        secrets.mariadb = portable;
+        writePrivateJson(layout.localSecrets, secrets);
+        setup = await createWithAdmin({ host: '127.0.0.1', port: portable.port, user: 'root', password: portable.rootPassword }, database, previous);
+    } else {
+        installSystemPackage();
+        const runner = socketRunner();
+        try {
+            setup = await provisionDatabase(runner, { host: '127.0.0.1', port: await systemPort(runner) }, database, previous);
+        } catch (error) {
+            throw explainDatabaseError(error, { host: '127.0.0.1', port: LOCAL_DB_PORT });
+        }
+    }
+    const { version, tls } = await testAccess(setup.server);
+    log.ok(`Base « ${database} » prête (${version}${tls ? ', chiffrée en TLS' : ''}), utilisateur du serveur et utilisateur en lecture seule créés`);
+    return setup;
+}
+
+async function setupDatabase(layout: Layout, answers: Answers, host: Host, secrets: LocalSecrets, options: InstallOptions): Promise<DatabaseSetup> {
     log.step('Base de données');
-    const hostedByProvider = host.container !== null;
+    const previous = secrets.database ?? null;
     const mode = await answers.ask({
         key: 'dbMode',
-        label: "Base de données : « create » pour la créer avec un compte administrateur, « existing » pour une base déjà créée (hébergeur)",
-        defaultValue: hostedByProvider ? 'existing' : 'create',
-        validate: (value) => (value === 'create' || value === 'existing' ? null : 'réponds create ou existing'),
+        label: "Base de données : « install » pour installer MariaDB sur cette machine, « create » pour créer la base dans un MariaDB existant avec son compte administrateur, « existing » pour une base déjà créée (hébergeur)",
+        defaultValue: await defaultDatabaseMode(host),
+        validate: (value) => (['install', 'create', 'existing'].includes(value) ? null : 'réponds install, create ou existing'),
     });
+
+    if (mode === 'install') {
+        if (host.container !== null) throw new InstallError('MariaDB ne peut pas être installé dans un conteneur.', 'Utilise la base fournie par ton hébergeur (existing), ou le service MariaDB du docker-compose.');
+        return installLocalDatabase(layout, answers, host, secrets, options);
+    }
 
     const dbHost = await answers.ask({ key: 'dbHost', label: 'Adresse de la base', defaultValue: '127.0.0.1', validate: notEmpty });
     const dbPort = Number(await answers.ask({ key: 'dbPort', label: 'Port de la base', defaultValue: '3306', validate: isPort }));
@@ -155,7 +198,7 @@ async function usesHostedDatabase(answers: Answers, host: Host, license: Install
     log.step('Base de données');
     log.info('Ta licence premium comprend une base de données hébergée par Prax.');
     log.info("Elle n'accepte que l'adresse IP du serveur de production déclarée dans ton espace client.");
-    const production = await answers.confirm('Ce serveur est-il ton serveur de production', host.container !== null);
+    const production = await answers.confirm('Ce serveur est-il ton serveur de production', host.container !== null, 'productionServer');
     if (production) {
         log.ok('Base hébergée par Prax utilisée');
         log.warn("Vérifie dans ton espace client que l'IP déclarée est bien celle de ce serveur.");
@@ -284,7 +327,7 @@ export async function runInstall(options: InstallOptions): Promise<void> {
         const hosted = await usesHostedDatabase(answers, host, license);
         let database: DatabaseSetup | null = null;
         if (!hosted) {
-            database = await setupDatabase(answers, host, secrets.database ?? null);
+            database = await setupDatabase(layout, answers, host, secrets, options);
             secrets.database = database;
             writePrivateJson(layout.localSecrets, secrets);
         }
@@ -307,12 +350,54 @@ export async function runInstall(options: InstallOptions): Promise<void> {
             withTxAdmin: options.withTxAdmin,
             txAdminPort: options.txAdminPort,
             forcedGamePort: host.container || options.gamePort ? host.gamePort : null,
+            preStart: host.target === 'windows' && secrets.mariadb ? windowsStartLines(layout, secrets.mariadb) : [],
         });
-        log.info(`Lance ${script}`);
-        if (options.withTxAdmin) log.info(`Puis ouvre http://localhost:${options.txAdminPort} et connecte-toi avec le compte txAdmin.`);
-        log.info(`En jeu : F8 puis « connect localhost:${host.gamePort} ».`);
+        if (host.container === null) await setupMachine(layout, answers, host, options, script);
+        else log.info(`Lance ${script}`);
     }
 
     log.step('Terminé');
     log.ok('La base Prax est installée.');
+    if (options.withTxAdmin) log.info(`txAdmin : http://localhost:${options.txAdminPort}, avec le compte txAdmin.`);
+    log.info(`En jeu : F8 puis « connect localhost:${host.gamePort} ».`);
+}
+
+async function setupMachine(layout: Layout, answers: Answers, host: Host, options: InstallOptions, script: string): Promise<void> {
+    const elevated = isElevated(host.target);
+    const ports: FirewallPort[] = [];
+    if (await answers.confirm(`Ouvrir le port ${host.gamePort} dans le pare-feu, pour que les joueurs puissent se connecter`, true, 'openFirewall')) {
+        ports.push({ port: host.gamePort, protocol: 'TCP', label: 'jeu' }, { port: host.gamePort, protocol: 'UDP', label: 'jeu' });
+    }
+    if (options.withTxAdmin && (await answers.confirm(`Ouvrir aussi le port ${options.txAdminPort} de txAdmin, pour le gérer depuis une autre machine`, false, 'openTxAdminPort'))) {
+        ports.push({ port: options.txAdminPort, protocol: 'TCP', label: 'txadmin' });
+    }
+    if (ports.length > 0) openFirewall(host.target, ports);
+
+    const autostart = (await answers.confirm('Démarrer le serveur automatiquement avec la machine', elevated, 'autostart'))
+        ? installAutostart(layout, host.target, script)
+        : null;
+
+    if (!(await answers.confirm('Lancer le serveur maintenant', true, 'startNow'))) {
+        log.info(`Pour le lancer plus tard : ${script}`);
+        return;
+    }
+    startServer(layout, host.target, script, autostart);
+    log.info('Premier démarrage : les migrations de la base peuvent prendre une minute.');
+    let lastReport = 0;
+    const info = await waitOnline(host.gamePort, (elapsed) => {
+        if (elapsed - lastReport < PROGRESS_EVERY_SECONDS) return;
+        lastReport = elapsed;
+        log.info(`… toujours en démarrage (${elapsed} s)`);
+    });
+    if (!info) {
+        log.warn(`Le serveur ne répond pas encore sur le port ${host.gamePort}.`);
+        log.info(options.withTxAdmin ? `Regarde la console dans txAdmin (http://localhost:${options.txAdminPort}).` : `Regarde la fenêtre du serveur${host.target === 'linux' ? ` ou ${layout.serverLog}` : ''}, puis lance prax doctor.`);
+        return;
+    }
+    const missing = missingResources(info);
+    if (missing.length > 0) {
+        log.warn(`Le serveur répond, mais ${missing.join(' et ')} n'a pas démarré. Regarde sa console, puis lance prax doctor.`);
+        return;
+    }
+    log.ok(`Serveur en ligne sur le port ${host.gamePort} : pcore et pguard démarrés`);
 }

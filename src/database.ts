@@ -90,51 +90,83 @@ function quoteIdentifier(value: string): string {
     return `\`${value}\``;
 }
 
-async function userExists(connection: mysql.Connection, user: string): Promise<boolean> {
-    const [rows] = await connection.query('SELECT 1 FROM mysql.user WHERE User = ? LIMIT 1', [user]);
-    return (rows as unknown[]).length > 0;
+export type SqlParam = string | number | boolean | null;
+
+export type SqlRunner = {
+    tls: boolean;
+    query(sql: string, params?: SqlParam[]): Promise<unknown[]>;
+    close(): Promise<void>;
+};
+
+export async function tcpRunner(access: Omit<DatabaseAccess, 'database'>): Promise<SqlRunner> {
+    const opened = await openConnection(access);
+    return {
+        tls: opened.tls,
+        async query(sql, params = []) {
+            const [rows] = await opened.connection.query(sql, params);
+            return Array.isArray(rows) ? rows : [];
+        },
+        async close() {
+            await opened.connection.end().catch(() => undefined);
+        },
+    };
+}
+
+export function formatSql(sql: string, params: SqlParam[]): string {
+    return mysql.format(sql, params);
+}
+
+export function explainDatabaseError(error: unknown, access: { host: string; port: number }): InstallError {
+    return error instanceof InstallError ? error : explain(error, access);
+}
+
+async function userExists(runner: SqlRunner, user: string): Promise<boolean> {
+    const rows = await runner.query('SELECT 1 FROM mysql.user WHERE User = ? LIMIT 1', [user]);
+    return rows.length > 0;
+}
+
+export async function provisionDatabase(runner: SqlRunner, endpoint: { host: string; port: number }, database: string, previous: DatabaseSetup | null): Promise<DatabaseSetup> {
+    const schema = quoteIdentifier(database);
+    const users = userNamesFor(database);
+    const base = { host: endpoint.host, port: endpoint.port, database, tls: runner.tls };
+
+    const reusable = previous && previous.server.database === database && previous.server.user === users.server && previous.readOnly?.user === users.readOnly;
+    if (reusable && previous.readOnly) {
+        await testAccess(previous.server);
+        return previous;
+    }
+
+    for (const user of [users.server, users.readOnly]) {
+        if (await userExists(runner, user)) {
+            throw new InstallError(
+                `L'utilisateur MariaDB « ${user} » existe déjà : l'installeur ne touche jamais à un utilisateur qu'il n'a pas créé.`,
+                'Choisis un autre nom de base, ou réponds « existing » pour utiliser une base et un utilisateur déjà prêts.',
+            );
+        }
+    }
+
+    const serverPassword = randomPassword();
+    const readOnlyPassword = randomPassword();
+    await runner.query(`CREATE DATABASE IF NOT EXISTS ${schema} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    await runner.query('CREATE USER ?@? IDENTIFIED BY ?', [users.server, '%', serverPassword]);
+    await runner.query('CREATE USER ?@? IDENTIFIED BY ?', [users.readOnly, '%', readOnlyPassword]);
+    await runner.query(`GRANT ALL PRIVILEGES ON ${schema}.* TO ?@?`, [users.server, '%']);
+    await runner.query(`GRANT SELECT ON ${schema}.* TO ?@?`, [users.readOnly, '%']);
+
+    return {
+        server: { ...base, user: users.server, password: serverPassword },
+        readOnly: { ...base, user: users.readOnly, password: readOnlyPassword },
+    };
 }
 
 export async function createWithAdmin(admin: Omit<DatabaseAccess, 'database'>, database: string, previous: DatabaseSetup | null): Promise<DatabaseSetup> {
-    let connection: mysql.Connection | undefined;
+    let runner: SqlRunner | undefined;
     try {
-        const opened = await openConnection(admin);
-        connection = opened.connection;
-        const schema = quoteIdentifier(database);
-        const users = userNamesFor(database);
-        const base = { host: admin.host, port: admin.port, database, tls: opened.tls };
-
-        const reusable = previous && previous.server.database === database && previous.server.user === users.server && previous.readOnly?.user === users.readOnly;
-        if (reusable && previous.readOnly) {
-            await testAccess(previous.server);
-            return previous;
-        }
-
-        for (const user of [users.server, users.readOnly]) {
-            if (await userExists(connection, user)) {
-                throw new InstallError(
-                    `L'utilisateur MariaDB « ${user} » existe déjà : l'installeur ne touche jamais à un utilisateur qu'il n'a pas créé.`,
-                    'Choisis un autre nom de base, ou réponds « existing » pour utiliser une base et un utilisateur déjà prêts.',
-                );
-            }
-        }
-
-        const serverPassword = randomPassword();
-        const readOnlyPassword = randomPassword();
-        await connection.query(`CREATE DATABASE IF NOT EXISTS ${schema} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-        await connection.query('CREATE USER ?@? IDENTIFIED BY ?', [users.server, '%', serverPassword]);
-        await connection.query('CREATE USER ?@? IDENTIFIED BY ?', [users.readOnly, '%', readOnlyPassword]);
-        await connection.query(`GRANT ALL PRIVILEGES ON ${schema}.* TO ?@?`, [users.server, '%']);
-        await connection.query(`GRANT SELECT ON ${schema}.* TO ?@?`, [users.readOnly, '%']);
-
-        return {
-            server: { ...base, user: users.server, password: serverPassword },
-            readOnly: { ...base, user: users.readOnly, password: readOnlyPassword },
-        };
+        runner = await tcpRunner(admin);
+        return await provisionDatabase(runner, admin, database, previous);
     } catch (error) {
-        if (error instanceof InstallError) throw error;
-        throw explain(error, admin);
+        throw explainDatabaseError(error, admin);
     } finally {
-        await connection?.end().catch(() => undefined);
+        await runner?.close();
     }
 }

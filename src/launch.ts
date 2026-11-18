@@ -9,10 +9,11 @@ export type LaunchOptions = {
     withTxAdmin: boolean;
     txAdminPort: number;
     forcedGamePort: number | null;
+    preStart: string[];
 };
 
 function windowsScript(options: LaunchOptions): string {
-    const lines = ['@echo off', 'setlocal', 'cd /d "%~dp0"'];
+    const lines = ['@echo off', 'setlocal', 'cd /d "%~dp0"', ...options.preStart];
     if (options.withTxAdmin) {
         lines.push('set "TXHOST_DATA_PATH=%~dp0txData"', `set "TXHOST_TXA_PORT=${options.txAdminPort}"`);
         if (options.forcedGamePort) lines.push(`set "TXHOST_FXS_PORT=${options.forcedGamePort}"`);

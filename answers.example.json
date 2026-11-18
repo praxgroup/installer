@@ -16,5 +16,9 @@
   "licenseKey": "",
   "licenseSecret": "",
   "txAdminUser": "admin",
-  "txAdminPassword": ""
+  "txAdminPassword": "",
+  "openFirewall": "o",
+  "openTxAdminPort": "n",
+  "autostart": "o",
+  "startNow": "o"
 }

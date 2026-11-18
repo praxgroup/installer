@@ -26,7 +26,8 @@ Options de prax install :
   --no-txadmin           démarrer FXServer directement, sans txAdmin
   --reconfigure          refaire server.cfg même s'il existe
   --game-port <port>     port du jeu (par défaut 30120, ou celui de l'hébergeur)
-  --txadmin-port <port>  port de txAdmin (par défaut 40120)`;
+  --txadmin-port <port>  port de txAdmin (par défaut 40120)
+  --mariadb-from <dossier>  MariaDB pour Windows déjà extrait (dossier avec bin\), au lieu de le télécharger`;
 
 function parsePort(value: string, option: string): number {
     const port = Number(value);
@@ -71,6 +72,7 @@ async function main(): Promise<number> {
             reconfigure: { type: 'boolean', default: false },
             'game-port': { type: 'string' },
             license: { type: 'string' },
+            'mariadb-from': { type: 'string' },
             'txadmin-port': { type: 'string', default: String(DEFAULT_TXADMIN_PORT) },
             help: { type: 'boolean', short: 'h', default: false },
         },
@@ -99,6 +101,7 @@ async function main(): Promise<number> {
             gamePort,
             txAdminPort,
             licenseFile: values.license,
+            mariadbFrom: values['mariadb-from'],
             dir: values.dir,
             from: values.from,
             answersFile: values.answers,

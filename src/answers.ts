@@ -103,9 +103,9 @@ export class Answers {
         }
     }
 
-    async confirm(label: string, defaultYes: boolean): Promise<boolean> {
+    async confirm(label: string, defaultYes: boolean, key: string = label): Promise<boolean> {
         const value = await this.ask({
-            key: label,
+            key,
             label: `${label} (o/n)`,
             defaultValue: defaultYes ? 'o' : 'n',
             validate: (answer) => (/^(o|oui|y|yes|n|non|no)$/i.test(answer) ? null : 'réponds o ou n'),

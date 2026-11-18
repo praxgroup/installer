@@ -6,6 +6,7 @@ import { layoutOf } from './layout.ts';
 import { log } from './log.ts';
 import { detectHost } from './platform.ts';
 import { DEV_ONLY_CONVARS, hasDirective, readCfgValue } from './servercfg.ts';
+import { missingResources, probeServer } from './system.ts';
 
 type Finding = { ok: boolean; text: string; fix?: string };
 
@@ -13,7 +14,7 @@ const PLACEHOLDERS = ['CHANGE_ME', 'remplacer_par_votre_license'];
 const REQUIRED_RESOURCES = ['pdeps', 'pstreams', 'pconfig', 'pcore', 'pguard'];
 const ENSURED_RESOURCES = ['pdeps', 'pstreams', 'pcore', 'pguard'];
 
-export function runDoctor(dir: string): number {
+export async function runDoctor(dir: string): Promise<number> {
     const layout = layoutOf(dir);
     const host = detectHost();
     const findings: Finding[] = [];
@@ -65,6 +66,18 @@ export function runDoctor(dir: string): number {
         } else {
             findings.push({ ok: true, text: 'Ordre des ressources correct' });
         }
+    }
+
+    const cfgText = fs.existsSync(layout.serverCfg) ? fs.readFileSync(layout.serverCfg, 'utf8') : '';
+    const gamePort = Number(readCfgValue(cfgText, 'endpoint_add_tcp')?.split(':').pop()) || host.gamePort;
+    const info = await probeServer(gamePort);
+    if (!info) {
+        findings.push({ ok: true, text: `Serveur à l'arrêt (aucune réponse sur le port ${gamePort})` });
+    } else {
+        const missing = missingResources(info);
+        findings.push(missing.length === 0
+            ? { ok: true, text: `Serveur en ligne sur le port ${gamePort} : pcore et pguard démarrés` }
+            : { ok: false, text: `Serveur en ligne, mais ${missing.join(' et ')} n'a pas démarré`, fix: 'Regarde la console du serveur : la première erreur rouge donne la cause.' });
     }
 
     log.title(`Diagnostic de ${layout.root}`);

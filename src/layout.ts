@@ -12,6 +12,9 @@ export type Layout = {
     cache: string;
     state: string;
     localSecrets: string;
+    mariadb: string;
+    mariadbData: string;
+    serverLog: string;
 };
 
 export function layoutOf(root: string): Layout {
@@ -30,5 +33,8 @@ export function layoutOf(root: string): Layout {
         cache: path.join(praxDir, 'cache'),
         state: path.join(praxDir, 'state.json'),
         localSecrets: path.join(praxDir, 'local-secrets.json'),
+        mariadb: path.join(absolute, 'mariadb'),
+        mariadbData: path.join(absolute, 'mariadb', 'data'),
+        serverLog: path.join(praxDir, 'server.log'),
     };
 }
