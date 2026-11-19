@@ -140,6 +140,8 @@ async function downloadBlob(session: SiteSession, hash: string): Promise<Buffer>
 export async function installFromSite(layout: Layout, session: SiteSession, version: string | undefined): Promise<Manifest> {
     const manifest = await fetchRelease(session, version);
     log.info(`Version ${manifest.version} : ${manifest.files.length} fichiers, vérifiés un par un.`);
-    await applyManifest(layout, manifest, (entry) => downloadBlob(session, entry.sha256), REMOTE_CONCURRENCY);
+    const packs = manifest.packs?.length ?? 0;
+    if (packs > 0) log.info(`Petits fichiers regroupés en ${packs} paquets.`);
+    await applyManifest(layout, manifest, (entry) => downloadBlob(session, entry.sha256), REMOTE_CONCURRENCY, (hash) => downloadBlob(session, hash));
     return manifest;
 }
