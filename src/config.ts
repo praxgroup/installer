@@ -487,13 +487,23 @@ export function renderOverrides(overrides: LuaTable): string {
 
 export type ChangeResult = { path: string; file: string; before: LuaValue | undefined; after: LuaValue | undefined; backup: string | null; removedFile: boolean };
 
-function commit(workspace: ConfigWorkspace, file: ConfigFile, overrides: LuaTable, keys: LuaKey[]): ChangeResult {
+function commit(workspace: ConfigWorkspace, file: ConfigFile, overrides: LuaTable, keys: LuaKey[], dryRun: boolean): ChangeResult {
     const label = formatPath(['Config', ...keys]);
     const merged = mergeAll(workspace.defaults, workspace.files, { file, overrides });
     const before = new Set(file.overrides ? validateOverrides(workspace, file, file.overrides, workspace.merged) : []);
     const after = validateOverrides(workspace, file, overrides, merged).filter((problem) => !before.has(problem));
     if (after.length > 0) {
         throw new InstallError(`Réglage refusé, rien n'a été écrit :\n${after.map((problem) => `    ${problem}`).join('\n')}`);
+    }
+    if (dryRun) {
+        return {
+            path: label,
+            file: file.overrideRelative,
+            before: valueAt(workspace.merged, keys),
+            after: valueAt(merged, keys),
+            backup: null,
+            removedFile: overrides.isEmpty && fs.existsSync(file.overrideFile),
+        };
     }
     let backup: string | null = null;
     if (file.overrideHasComments && fs.existsSync(file.overrideFile)) {
@@ -531,7 +541,7 @@ function editableOverrides(file: ConfigFile): LuaTable {
     return file.overrides ? (cloneLua(file.overrides) as LuaTable) : new LuaTable();
 }
 
-export function setEntry(workspace: ConfigWorkspace, text: string, raw: string): ChangeResult {
+export function setEntry(workspace: ConfigWorkspace, text: string, raw: string, dryRun = false): ChangeResult {
     const keys = parseConfigPath(text);
     const { file, node } = nodeAt(workspace, keys);
     const label = formatPath(['Config', ...keys]);
@@ -541,13 +551,54 @@ export function setEntry(workspace: ConfigWorkspace, text: string, raw: string):
     const value = parseCliValue(raw, node);
     const overrides = editableOverrides(file);
     placeOverride(overrides, workspace.merged, keys, value);
-    return commit(workspace, file, overrides, keys);
+    return commit(workspace, file, overrides, keys, dryRun);
 }
 
-export function unsetEntry(workspace: ConfigWorkspace, text: string): ChangeResult {
+export function unsetEntry(workspace: ConfigWorkspace, text: string, dryRun = false): ChangeResult {
     const keys = parseConfigPath(text);
     const { file } = nodeAt(workspace, keys);
     const overrides = editableOverrides(file);
     removeOverride(overrides, keys, formatPath(['Config', ...keys]));
-    return commit(workspace, file, overrides, keys);
+    return commit(workspace, file, overrides, keys, dryRun);
+}
+
+export type SearchHit = { path: string; file: string; type: string; label?: string; help?: string; score: number };
+
+function fold(text: string): string {
+    return text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+function walkSchema(node: SchemaNode, keys: LuaKey[], visit: (node: SchemaNode, keys: LuaKey[]) => void, depth: number): void {
+    visit(node, keys);
+    if (depth > 6) return;
+    if (node.fields) for (const [key, child] of Object.entries(node.fields)) walkSchema(child, [...keys, key], visit, depth + 1);
+    if (node.items) walkSchema(node.items, [...keys, 1], visit, depth + 1);
+    if (node.values && !Array.isArray(node.values)) walkSchema(node.values, [...keys, '<clé>'], visit, depth + 1);
+}
+
+export function searchSchema(workspace: ConfigWorkspace, query: string, limit = 15): SearchHit[] {
+    const terms = fold(query).split(/[^a-z0-9_]+/).filter((term) => term.length >= 2);
+    if (terms.length === 0) return [];
+    const hits: SearchHit[] = [];
+    for (const file of workspace.files) {
+        for (const [top, node] of Object.entries(file.schema.keys)) {
+            walkSchema(node, [top], (current, keys) => {
+                const path = formatPath(['Config', ...keys]);
+                const labels = [current.label?.fr, current.label?.en].filter(Boolean).join(' ');
+                const helps = [current.help?.fr, current.help?.en].filter(Boolean).join(' ');
+                const inPath = fold(path);
+                const inLabel = fold(labels);
+                const inHelp = fold(helps);
+                let score = 0;
+                for (const term of terms) {
+                    if (inPath.includes(term)) score += 3;
+                    if (inLabel.includes(term)) score += 4;
+                    if (inHelp.includes(term)) score += 1;
+                }
+                if (score === 0) return;
+                hits.push({ path, file: file.overrideRelative, type: describeType(current), label: current.label?.fr, help: current.help?.fr, score: score - keys.length * 0.1 });
+            }, 0);
+        }
+    }
+    return hits.sort((a, b) => b.score - a.score).slice(0, limit);
 }

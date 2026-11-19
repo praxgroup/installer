@@ -8,13 +8,30 @@ import { detectHost } from './platform.ts';
 import { DEV_ONLY_CONVARS, hasDirective, readCfgValue } from './servercfg.ts';
 import { missingResources, probeServer } from './system.ts';
 
-type Finding = { ok: boolean; text: string; fix?: string };
+export type Finding = { ok: boolean; text: string; fix?: string };
 
 const PLACEHOLDERS = ['CHANGE_ME', 'remplacer_par_votre_license'];
 const REQUIRED_RESOURCES = ['pdeps', 'pstreams', 'pconfig', 'pcore', 'pguard'];
 const ENSURED_RESOURCES = ['pdeps', 'pstreams', 'pcore', 'pguard'];
 
 export async function runDoctor(dir: string): Promise<number> {
+    const { root, findings } = await collectFindings(dir);
+    log.title(`Diagnostic de ${root}`);
+    let problems = 0;
+    for (const finding of findings) {
+        if (finding.ok) {
+            log.ok(finding.text);
+            continue;
+        }
+        problems++;
+        log.fail(finding.text);
+        if (finding.fix) log.info(`  → ${finding.fix}`);
+    }
+    log.step(problems === 0 ? 'Aucun problème trouvé' : `${problems} problème(s) trouvé(s)`);
+    return problems === 0 ? 0 : 1;
+}
+
+export async function collectFindings(dir: string): Promise<{ root: string; findings: Finding[] }> {
     const layout = layoutOf(dir);
     const host = detectHost();
     const findings: Finding[] = [];
@@ -80,17 +97,5 @@ export async function runDoctor(dir: string): Promise<number> {
             : { ok: false, text: `Serveur en ligne, mais ${missing.join(' et ')} n'a pas démarré`, fix: 'Regarde la console du serveur : la première erreur rouge donne la cause.' });
     }
 
-    log.title(`Diagnostic de ${layout.root}`);
-    let problems = 0;
-    for (const finding of findings) {
-        if (finding.ok) {
-            log.ok(finding.text);
-            continue;
-        }
-        problems++;
-        log.fail(finding.text);
-        if (finding.fix) log.info(`  → ${finding.fix}`);
-    }
-    log.step(problems === 0 ? 'Aucun problème trouvé' : `${problems} problème(s) trouvé(s)`);
-    return problems === 0 ? 0 : 1;
+    return { root: layout.root, findings };
 }
