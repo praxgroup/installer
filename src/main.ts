@@ -5,8 +5,13 @@ import type { FxChannel } from './fxserver.ts';
 import { runInstall } from './install.ts';
 import { InstallError, log } from './log.ts';
 import { DEFAULT_TXADMIN_PORT } from './platform.ts';
+import { IA_USAGE, runIa } from './ia.ts';
+import { runMcp } from './mcp.ts';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
+
+const MCP_USAGE = `prax mcp [--dir <dossier>] : serveur MCP local (stdio) pour Claude, Cursor ou une autre IA.
+Il n'affiche rien lui-même : c'est l'IA qui le lance. Pour le brancher : prax ia claude-desktop.`;
 
 const USAGE = `prax ${VERSION} : installe et configure la base Prax
 
@@ -14,6 +19,8 @@ Utilisation :
   prax install [options]     installe la base, FXServer, la base de données, server.cfg et txAdmin
   prax doctor [--dir <dossier>]   cherche ce qui empêche le serveur de démarrer
   prax config <get|set|unset|check>   lit et modifie les réglages de la base (prax config --help)
+  prax ia <claude-desktop|claude-code|config>   branche une IA sur ce serveur (prax ia --help)
+  prax mcp [--dir <dossier>]   serveur MCP local, lancé par l'IA
   prax version
 
 Options de prax install :
@@ -38,30 +45,58 @@ function parsePort(value: string, option: string): number {
     return port;
 }
 
-function runConfigCommand(argv: string[]): number {
-    const args: string[] = [];
-    let dir = 'prax-server';
-    let resources: string | undefined;
+type DirArgs = { args: string[]; dir: string; resources: string | undefined; help: boolean };
+
+function parseDirArgs(argv: string[]): DirArgs {
+    const parsed: DirArgs = { args: [], dir: 'prax-server', resources: undefined, help: false };
     for (let index = 0; index < argv.length; index++) {
         const arg = argv[index] ?? '';
         if (arg === '--dir' || arg === '--resources') {
             const value = argv[++index];
             if (!value) throw new InstallError(`${arg} demande un dossier`);
-            if (arg === '--dir') dir = value;
-            else resources = value;
+            if (arg === '--dir') parsed.dir = value;
+            else parsed.resources = value;
         } else if (arg === '--help' || arg === '-h') {
-            console.log(CONFIG_USAGE);
-            return 0;
+            parsed.help = true;
         } else {
-            args.push(arg);
+            parsed.args.push(arg);
         }
     }
-    return runConfig(args, dir, resources);
+    return parsed;
+}
+
+function runConfigCommand(argv: string[]): number {
+    const parsed = parseDirArgs(argv);
+    if (parsed.help) {
+        console.log(CONFIG_USAGE);
+        return 0;
+    }
+    return runConfig(parsed.args, parsed.dir, parsed.resources);
+}
+
+async function runMcpCommand(argv: string[]): Promise<number> {
+    const parsed = parseDirArgs(argv);
+    if (parsed.help) {
+        console.error(MCP_USAGE);
+        return 0;
+    }
+    return runMcp(parsed.dir, parsed.resources, VERSION);
+}
+
+function runIaCommand(argv: string[]): number {
+    const parsed = parseDirArgs(argv);
+    if (parsed.help) {
+        console.log(IA_USAGE);
+        return 0;
+    }
+    return runIa(parsed.args, parsed.dir);
 }
 
 async function main(): Promise<number> {
     const argv = process.argv.slice(2);
     if (argv[0] === 'config') return runConfigCommand(argv.slice(1));
+    if (argv[0] === 'mcp') return runMcpCommand(argv.slice(1));
+    if (argv[0] === 'ia') return runIaCommand(argv.slice(1));
 
     const { positionals, values } = parseArgs({
         allowPositionals: true,
