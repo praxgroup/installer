@@ -9,7 +9,7 @@ import { DEFAULT_TXADMIN_PORT } from './platform.ts';
 import { IA_USAGE, runIa } from './ia.ts';
 import { runMcp } from './mcp.ts';
 
-const VERSION = '0.2.1';
+const VERSION = '0.2.2';
 
 const MCP_USAGE = `prax mcp [--dir <dossier>] : serveur MCP local (stdio) pour Claude, Cursor ou une autre IA.
 Il n'affiche rien lui-même : c'est l'IA qui le lance. Pour le brancher : prax ia claude-desktop.`;
