@@ -105,13 +105,28 @@ export async function connectWithCode(site: string): Promise<SiteSession> {
     throw new InstallError('Le code a expiré avant d\'être autorisé.', 'Relance prax install pour en obtenir un nouveau.');
 }
 
-export async function fetchRelease(session: SiteSession, version: string | undefined): Promise<Manifest> {
-    const index = await request<{ latest: string | null; versions: { version: string }[] }>(session.site, 'GET', 'install/releases', { token: session.downloadToken });
+export const BASE_CHANNELS = ['release', 'early', 'beta', 'dev'] as const;
+export type BaseChannel = (typeof BASE_CHANNELS)[number];
+export const DEFAULT_BASE_CHANNEL: BaseChannel = 'release';
+
+export function isBaseChannel(value: unknown): value is BaseChannel {
+    return typeof value === 'string' && (BASE_CHANNELS as readonly string[]).includes(value);
+}
+
+type ReleaseList = { channel?: string; channels?: string[]; latest: string | null; versions: { version: string; channel?: string }[] };
+
+export async function fetchRelease(session: SiteSession, version: string | undefined, channel: BaseChannel = DEFAULT_BASE_CHANNEL): Promise<Manifest> {
+    const index = await request<ReleaseList>(session.site, 'GET', `install/releases?channel=${channel}`, { token: session.downloadToken });
     const wanted = version ?? index.latest;
-    if (!wanted) throw new InstallError('Aucune version de la base n\'est encore publiée.', 'Réessaie plus tard, ou installe depuis un build local avec --from.');
-    if (version && !index.versions.some((entry) => entry.version === version)) {
-        throw new InstallError(`Version ${version} introuvable.`, `Versions disponibles : ${index.versions.map((entry) => entry.version).join(', ') || 'aucune'}.`);
+    if (!wanted) {
+        throw new InstallError(`Aucune version de la base n'est encore publiée sur le canal ${channel}.`, 'Réessaie plus tard, choisis un autre canal (--channel), ou installe depuis un build local avec --from.');
     }
+    if (version && !index.versions.some((entry) => entry.version === version)) {
+        const available = index.versions.map((entry) => (entry.channel ? `${entry.version} (${entry.channel})` : entry.version)).join(', ');
+        throw new InstallError(`Version ${version} introuvable, retirée ou réservée à un autre canal.`, `Versions disponibles pour cette licence : ${available || 'aucune'}.`);
+    }
+    const entry = index.versions.find((item) => item.version === wanted);
+    log.info(`Canal ${channel} : version ${wanted}${entry?.channel && entry.channel !== channel ? ` (publiée sur ${entry.channel})` : ''}.`);
     const manifest = checkManifest(await request<unknown>(session.site, 'GET', `install/releases/${wanted}`, { token: session.downloadToken }), `version ${wanted}`);
     if (manifest.version !== wanted) throw new InstallError(`Le site a renvoyé la version ${manifest.version} au lieu de ${wanted}.`);
     return manifest;
@@ -137,8 +152,8 @@ async function downloadBlob(session: SiteSession, hash: string): Promise<Buffer>
     }
 }
 
-export async function installFromSite(layout: Layout, session: SiteSession, version: string | undefined): Promise<Manifest> {
-    const manifest = await fetchRelease(session, version);
+export async function installFromSite(layout: Layout, session: SiteSession, version: string | undefined, channel: BaseChannel = DEFAULT_BASE_CHANNEL): Promise<Manifest> {
+    const manifest = await fetchRelease(session, version, channel);
     log.info(`Version ${manifest.version} : ${manifest.files.length} fichiers, vérifiés un par un.`);
     const packs = manifest.packs?.length ?? 0;
     if (packs > 0) log.info(`Petits fichiers regroupés en ${packs} paquets.`);

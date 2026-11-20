@@ -3,6 +3,7 @@ import { CONFIG_USAGE, runConfig } from './configcli.ts';
 import { runDoctor } from './doctor.ts';
 import type { FxChannel } from './fxserver.ts';
 import { runInstall } from './install.ts';
+import { BASE_CHANNELS, isBaseChannel, type BaseChannel } from './account.ts';
 import { InstallError, log } from './log.ts';
 import { DEFAULT_TXADMIN_PORT } from './platform.ts';
 import { IA_USAGE, runIa } from './ia.ts';
@@ -27,7 +28,8 @@ Options de prax install :
   --dir <dossier>        dossier d'installation (par défaut : ./prax-server)
   --from <dossier>       build local de la base (dossier build/<version> avec manifest.json), au lieu de la télécharger
   --token <jeton>        jeton d'installation de l'espace client (sinon : code à entrer sur le site)
-  --version <X.Y.Z>      version de la base à installer (par défaut : la dernière)
+  --version <X.Y.Z>      version de la base à installer (par défaut : la dernière du canal)
+  --channel <canal>      release (par défaut), early (premium, stable et en avance), beta (pas stable) ou dev (équipe Prax) ; retenu pour les mises à jour
   --site <adresse>       site Prax (par défaut : https://prax-studio.fr)
   --license <fichier>    fichier d'installation de l'espace client (licence et services premium)
   --answers <fichier>    réponses en JSON, pour une installation sans questions
@@ -113,6 +115,7 @@ async function main(): Promise<number> {
             'mariadb-from': { type: 'string' },
             token: { type: 'string' },
             version: { type: 'string' },
+            channel: { type: 'string' },
             site: { type: 'string' },
             'txadmin-port': { type: 'string', default: String(DEFAULT_TXADMIN_PORT) },
             help: { type: 'boolean', short: 'h', default: false },
@@ -136,6 +139,9 @@ async function main(): Promise<number> {
         if (values.fxserver !== 'recommended' && values.fxserver !== 'latest') {
             throw new InstallError(`Canal FXServer inconnu : ${values.fxserver}`, 'Utilise recommended ou latest.');
         }
+        if (values.channel !== undefined && !isBaseChannel(values.channel)) {
+            throw new InstallError(`Canal inconnu : ${values.channel}`, `Utilise ${BASE_CHANNELS.join(', ')}.`);
+        }
         const gamePort = values['game-port'] === undefined ? null : parsePort(values['game-port'], '--game-port');
         const txAdminPort = parsePort(values['txadmin-port'], '--txadmin-port');
         await runInstall({
@@ -145,6 +151,7 @@ async function main(): Promise<number> {
             mariadbFrom: values['mariadb-from'],
             installToken: values.token,
             version: values.version,
+            channel: values.channel as BaseChannel | undefined,
             site: values.site,
             dir: values.dir,
             from: values.from,
