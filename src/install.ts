@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Answers } from './answers.ts';
-import { connectWithCode, connectWithToken, installFromSite, resolveSite } from './account.ts';
-import type { SiteSession } from './account.ts';
+import { connectWithCode, connectWithToken, DEFAULT_BASE_CHANNEL, installFromSite, isBaseChannel, resolveSite } from './account.ts';
+import type { BaseChannel, SiteSession } from './account.ts';
 import { connectionString, createWithAdmin, explainDatabaseError, provisionDatabase, testAccess } from './database.ts';
 import type { DatabaseAccess, DatabaseSetup } from './database.ts';
 import { installPortable, installSystemPackage, socketRunner, systemPort, windowsStartLines } from './mariadb.ts';
@@ -40,6 +40,7 @@ export type InstallOptions = {
     site: string | undefined;
     installToken: string | undefined;
     version: string | undefined;
+    channel: BaseChannel | undefined;
 };
 
 type LocalSecrets = {
@@ -94,8 +95,13 @@ async function connectAccount(options: InstallOptions, answers: Answers): Promis
 
 async function installBase(layout: Layout, options: InstallOptions, state: InstallState, session: SiteSession | null): Promise<void> {
     log.step('Base Prax');
-    const manifest = session ? await installFromSite(layout, session, options.version) : await installFromBuild(layout, path.resolve(options.from as string));
-    state.markDone('base', { version: manifest.version, commit: manifest.commit, source: session ? new URL(session.site).host : 'build local' });
+    const previous = state.details('base').channel;
+    const channel: BaseChannel = options.channel ?? (isBaseChannel(previous) ? previous : DEFAULT_BASE_CHANNEL);
+    const manifest = session ? await installFromSite(layout, session, options.version, channel) : await installFromBuild(layout, path.resolve(options.from as string));
+    const details: Record<string, string> = { version: manifest.version, source: session ? new URL(session.site).host : 'build local' };
+    if (manifest.commit) details.commit = manifest.commit;
+    if (session) details.channel = channel;
+    state.markDone('base', details);
 }
 
 async function defaultDatabaseMode(host: Host): Promise<'install' | 'create' | 'existing'> {
