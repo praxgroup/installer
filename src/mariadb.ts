@@ -306,13 +306,24 @@ export async function systemPort(runner: SqlRunner): Promise<number> {
     return Number.isInteger(port) && port > 0 ? port : 3306;
 }
 
+export const DATABASE_SCRIPT = 'start-mariadb.bat';
+
+function powershellLiteral(value: string): string {
+    return `'${value.replace(/'/g, "''")}'`;
+}
+
+function hiddenStartLine(server: string, config: string): string {
+    const argument = `('--defaults-file=' + [char]34 + ${powershellLiteral(config)} + [char]34)`;
+    return `powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath ${powershellLiteral(server)} -ArgumentList ${argument} -WindowStyle Hidden"`;
+}
+
 export function windowsStartLines(layout: Layout, mariadb: PortableMariaDb): string[] {
     const binaries = portableBinaries(mariadb.home);
     if (!binaries) return [];
     const config = portableConfigFile(layout);
     const ping = `"${binaries.admin}" --defaults-file="${config}" --connect-timeout=2 ping >nul 2>&1`;
     return [
-        `${ping} || start "MariaDB" /min "${binaries.server}" --defaults-file="${config}"`,
+        `${ping} || ${hiddenStartLine(binaries.server, config)}`,
         'set /a PRAX_DB_WAIT=0',
         ':wait_mariadb',
         `${ping} && goto mariadb_ready`,
@@ -322,4 +333,14 @@ export function windowsStartLines(layout: Layout, mariadb: PortableMariaDb): str
         'goto wait_mariadb',
         ':mariadb_ready',
     ];
+}
+
+export function writeWindowsDatabaseScript(layout: Layout, mariadb: PortableMariaDb): string | null {
+    const lines = windowsStartLines(layout, mariadb);
+    if (!lines.length) return null;
+    const file = path.join(layout.root, DATABASE_SCRIPT);
+    const body = ['@echo off', 'setlocal', ...lines, 'echo MariaDB tourne.', 'timeout /t 3 >nul'];
+    fs.writeFileSync(file, body.join('\r\n') + '\r\n');
+    log.ok(`Relance de MariaDB seule : ${DATABASE_SCRIPT}`);
+    return file;
 }

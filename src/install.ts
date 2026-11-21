@@ -5,7 +5,7 @@ import { connectWithCode, connectWithToken, DEFAULT_BASE_CHANNEL, installFromSit
 import type { BaseChannel, SiteSession } from './account.ts';
 import { connectionString, createWithAdmin, explainDatabaseError, provisionDatabase, testAccess } from './database.ts';
 import type { DatabaseAccess, DatabaseSetup } from './database.ts';
-import { installPortable, installSystemPackage, socketRunner, systemPort, windowsStartLines } from './mariadb.ts';
+import { installPortable, installSystemPackage, socketRunner, systemPort, windowsStartLines, writeWindowsDatabaseScript } from './mariadb.ts';
 import type { PortableMariaDb } from './mariadb.ts';
 import { installAutostart, isElevated, missingResources, openFirewall, startServer, waitOnline } from './system.ts';
 import type { Autostart, FirewallPort } from './system.ts';
@@ -114,7 +114,7 @@ async function installLocalDatabase(layout: Layout, answers: Answers, host: Host
     const previous = secrets.database ?? null;
     let setup: DatabaseSetup;
     if (host.target === 'windows') {
-        log.info('MariaDB sera installé dans le dossier du serveur, sans rien installer dans Windows, et lancé par start.bat.');
+        log.info('MariaDB sera installé dans le dossier du serveur, sans rien installer dans Windows, et lancé sans fenêtre par start.bat (start-mariadb.bat le relance seul).');
         const portable = await installPortable(layout, secrets.mariadb, options.mariadbFrom);
         secrets.mariadb = portable;
         writePrivateJson(layout.localSecrets, secrets);
@@ -370,6 +370,7 @@ export async function runInstall(options: InstallOptions): Promise<void> {
             forcedGamePort: host.container || options.gamePort ? host.gamePort : null,
             preStart: host.target === 'windows' && secrets.mariadb ? windowsStartLines(layout, secrets.mariadb) : [],
         });
+        if (host.target === 'windows' && secrets.mariadb) writeWindowsDatabaseScript(layout, secrets.mariadb);
         if (host.container === null) await setupMachine(layout, answers, host, options, script, state);
         else log.info(`Lance ${script}`);
     }
