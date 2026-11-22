@@ -27,6 +27,8 @@ macOS : Cfx ne publie pas FXServer pour Mac. Il faut passer par l'image Docker.
 | Commande | Rôle |
 |---|---|
 | `prax install` | se connecte au compte client (code à entrer sur prax-studio.fr, ou jeton `--token` / `PRAX_INSTALL_TOKEN`), télécharge la base et installe FXServer, la base de données, `server.cfg` et txAdmin |
+| `prax update` | met la base à jour : dernière version du canal retenu à l'installation (`--version`, `--channel` pour en changer), seuls les fichiers changés sont téléchargés, avec sauvegarde, puis redémarrage et vérification du serveur |
+| `prax update --rollback` | revient à la version d'avant la dernière mise à jour (fichiers ; `--database` remet aussi la base, serveur arrêté) |
 | `prax doctor` | cherche ce qui empêche le serveur de démarrer, réglages de `pconfig` compris |
 | `prax config get [chemin]` | valeur d'un réglage, sa valeur par défaut, son type et son aide ; sans chemin, la liste des réglages |
 | `prax config set <chemin> <valeur>` | modifie un réglage dans `pconfig`, après l'avoir vérifié avec le schéma de la base |
@@ -35,6 +37,13 @@ macOS : Cfx ne publie pas FXServer pour Mac. Il faut passer par l'image Docker.
 | `prax version` | affiche la version |
 
 `prax config` n'écrit jamais dans `pcore` : les réglages vont dans `pconfig`, qu'une mise à jour ne touche pas. Un chemin s'écrit comme en Lua (`Garage.transferFee`, `Garage.garages["Pillbox Hill"].label`, `Garage.defaultColors[2]`), une valeur aussi (`750`, `true`, `"texte"` ou `texte`, `vec3(1, 2, 3)` ou `1, 2, 3`, `{ label = "Garage" }`). Modifier un élément d'une liste écrit la liste entière dans `pconfig`, car une liste y est toujours remplacée en entier. Les commentaires d'un fichier de `pconfig` ne sont pas gardés quand `prax config` le réécrit : l'ancien fichier est copié en `.bak`.
+
+## Ce que fait `prax update`
+
+- **Connexion** : il signe une demande avec la licence de `server.cfg` (`px:license` et `px:license_secret`), sans code à entrer. Sans licence dans `server.cfg`, il passe par un jeton (`--token`) ou un code, comme `prax install`.
+- **Sauvegarde** : avant d'écrire, il copie les fichiers remplacés ou retirés dans `.prax/backups/<date>_<version>/` et exporte la base de données (`--no-db-backup` pour le sauter). Les 5 dernières sauvegardes sont gardées.
+- **Fichiers** : seuls les fichiers changés sont téléchargés, chacun vérifié par son empreinte. `pconfig`, `server.cfg` et txAdmin ne sont jamais touchés. Les fichiers retirés de la base sont supprimés.
+- **Redémarrage** (`--no-restart` pour le sauter) : sous txAdmin, qui coupe RCON, il arrête le serveur de jeu et txAdmin le relance ; sinon il passe par RCON puis le script de démarrage. Il attend ensuite que la base ait fini de démarrer (licence vérifiée), 2 minutes au plus, et propose `--rollback` sinon.
 
 ## Ce que fait `prax install` sur la machine
 
@@ -63,7 +72,7 @@ Une installation sans questions (hébergeurs, Docker) passe par un fichier de r�
 | `runtime.fivem.net` | télécharger FXServer |
 | `downloads.mariadb.org` | sous Windows, en mode `install` : version LTS de MariaDB et son archive |
 | `github.com/praxgroup/installer` | télécharger le programme lui-même |
-| `api.prax-studio.fr` | connexion au compte client, licence, adresses de téléchargement de la base |
+| `prax-studio.fr` | connexion au compte client, licence, liste des versions et téléchargement de la base |
 
 Les secrets (clé de licence, mots de passe de la base, clé Cfx) ne quittent jamais la machine, sauf la licence envoyée à l'API Prax.
 
