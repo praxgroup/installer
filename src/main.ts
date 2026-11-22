@@ -8,8 +8,9 @@ import { InstallError, log } from './log.ts';
 import { DEFAULT_TXADMIN_PORT } from './platform.ts';
 import { IA_USAGE, runIa } from './ia.ts';
 import { runMcp } from './mcp.ts';
+import { runRollback, runUpdate } from './update.ts';
 
-const VERSION = '0.2.2';
+const VERSION = '0.3.0';
 
 const MCP_USAGE = `prax mcp [--dir <dossier>] : serveur MCP local (stdio) pour Claude, Cursor ou une autre IA.
 Il n'affiche rien lui-même : c'est l'IA qui le lance. Pour le brancher : prax ia claude-desktop.`;
@@ -18,6 +19,7 @@ const USAGE = `prax ${VERSION} : installe et configure la base Prax
 
 Utilisation :
   prax install [options]     installe la base, FXServer, la base de données, server.cfg et txAdmin
+  prax update [options]      met la base à jour (fichiers changés seulement), avec sauvegarde et retour arrière
   prax doctor [--dir <dossier>]   cherche ce qui empêche le serveur de démarrer
   prax config <get|set|unset|check>   lit et modifie les réglages de la base (prax config --help)
   prax ia <claude-desktop|claude-code|config>   branche une IA sur ce serveur (prax ia --help)
@@ -39,7 +41,18 @@ Options de prax install :
   --reconfigure          refaire server.cfg même s'il existe
   --game-port <port>     port du jeu (par défaut 30120, ou celui de l'hébergeur)
   --txadmin-port <port>  port de txAdmin (par défaut 40120)
-  --mariadb-from <dossier>  MariaDB pour Windows déjà extrait (dossier avec bin\), au lieu de le télécharger`;
+  --mariadb-from <dossier>  MariaDB pour Windows déjà extrait (dossier avec bin\), au lieu de le télécharger
+
+Options de prax update :
+  --dir <dossier>        dossier du serveur (par défaut : ./prax-server)
+  --version <X.Y.Z>      version voulue (par défaut : la dernière du canal retenu)
+  --channel <canal>      change de canal (release, early, beta, dev) et le retient
+  --token <jeton>        jeton de l'espace client (sinon : la licence de server.cfg, puis un code)
+  --no-db-backup         ne pas exporter la base avant la mise à jour
+  --no-restart           ne pas redémarrer le serveur
+  --force                réinstaller la même version
+  --rollback             revenir à la version d'avant la dernière mise à jour (fichiers)
+  --database             avec --rollback : remettre aussi la base exportée (serveur arrêté)`;
 
 function parsePort(value: string, option: string): number {
     const port = Number(value);
@@ -117,6 +130,11 @@ async function main(): Promise<number> {
             version: { type: 'string' },
             channel: { type: 'string' },
             site: { type: 'string' },
+            rollback: { type: 'boolean', default: false },
+            database: { type: 'boolean', default: false },
+            'no-restart': { type: 'boolean', default: false },
+            'no-db-backup': { type: 'boolean', default: false },
+            force: { type: 'boolean', default: false },
             'txadmin-port': { type: 'string', default: String(DEFAULT_TXADMIN_PORT) },
             help: { type: 'boolean', short: 'h', default: false },
         },
@@ -134,6 +152,27 @@ async function main(): Promise<number> {
     }
 
     if (command === 'doctor') return runDoctor(values.dir);
+
+    if (command === 'update') {
+        if (values.channel !== undefined && !isBaseChannel(values.channel)) {
+            throw new InstallError(`Canal inconnu : ${values.channel}`, `Utilise ${BASE_CHANNELS.join(', ')}.`);
+        }
+        if (values.rollback) {
+            await runRollback({ dir: values.dir, database: values.database, restart: !values['no-restart'] });
+            return 0;
+        }
+        await runUpdate({
+            dir: values.dir,
+            version: values.version,
+            channel: values.channel as BaseChannel | undefined,
+            site: values.site,
+            installToken: values.token,
+            restart: !values['no-restart'],
+            databaseBackup: !values['no-db-backup'],
+            force: values.force,
+        });
+        return 0;
+    }
 
     if (command === 'install') {
         if (values.fxserver !== 'recommended' && values.fxserver !== 'latest') {

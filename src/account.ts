@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { Layout } from './layout.ts';
 import { parseLicense } from './license.ts';
 import type { InstallLicense } from './license.ts';
@@ -105,6 +106,20 @@ export async function connectWithCode(site: string): Promise<SiteSession> {
     throw new InstallError('Le code a expiré avant d\'être autorisé.', 'Relance prax install pour en obtenir un nouveau.');
 }
 
+type LicenseDelivery = { download: { token: string; expiresAt: number }; license: { key: string; label: string } };
+
+export async function connectWithLicense(site: string, key: string, secret: string): Promise<SiteSession> {
+    log.step('Compte client');
+    const timestamp = Math.floor(Date.now() / 1000);
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const signature = crypto.createHmac('sha256', secret).update(['prax-update', key, timestamp, nonce].join('|')).digest('hex');
+    const delivery = await request<LicenseDelivery>(site, 'POST', 'install/license', { body: { license: key, timestamp, nonce, signature } });
+    if (!delivery.download?.token) throw new InstallError('Le site n\'a pas donné d\'accès au téléchargement.');
+    const license = parseLicense({ format: 1, license: { key, secret, plan: 'standard', label: delivery.license?.label ?? key } });
+    log.ok(`Licence du serveur reconnue : ${license.label}`);
+    return { site, license, downloadToken: delivery.download.token, expiresAt: delivery.download.expiresAt };
+}
+
 export const BASE_CHANNELS = ['release', 'early', 'beta', 'dev'] as const;
 export type BaseChannel = (typeof BASE_CHANNELS)[number];
 export const DEFAULT_BASE_CHANNEL: BaseChannel = 'release';
@@ -153,7 +168,10 @@ async function downloadBlob(session: SiteSession, hash: string): Promise<Buffer>
 }
 
 export async function installFromSite(layout: Layout, session: SiteSession, version: string | undefined, channel: BaseChannel = DEFAULT_BASE_CHANNEL): Promise<Manifest> {
-    const manifest = await fetchRelease(session, version, channel);
+    return applySiteManifest(layout, session, await fetchRelease(session, version, channel));
+}
+
+export async function applySiteManifest(layout: Layout, session: SiteSession, manifest: Manifest): Promise<Manifest> {
     log.info(`Version ${manifest.version} : ${manifest.files.length} fichiers, vérifiés un par un.`);
     const packs = manifest.packs?.length ?? 0;
     if (packs > 0) log.info(`Petits fichiers regroupés en ${packs} paquets.`);

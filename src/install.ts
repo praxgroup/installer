@@ -24,6 +24,7 @@ import { InstallState, readPrivateJson, writePrivateJson } from './state.ts';
 import { licenseDirectives, parseLicense, readLicenseFile } from './license.ts';
 import type { InstallLicense } from './license.ts';
 import { prepareTxAdmin } from './txadmin.ts';
+import { saveInstalledManifest } from './update.ts';
 
 export type InstallOptions = {
     dir: string;
@@ -98,6 +99,7 @@ async function installBase(layout: Layout, options: InstallOptions, state: Insta
     const previous = state.details('base').channel;
     const channel: BaseChannel = options.channel ?? (isBaseChannel(previous) ? previous : DEFAULT_BASE_CHANNEL);
     const manifest = session ? await installFromSite(layout, session, options.version, channel) : await installFromBuild(layout, path.resolve(options.from as string));
+    saveInstalledManifest(layout, manifest);
     const details: Record<string, string> = { version: manifest.version, source: session ? new URL(session.site).host : 'build local' };
     if (manifest.commit) details.commit = manifest.commit;
     if (session) details.channel = channel;
