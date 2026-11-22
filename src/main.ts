@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 import { CONFIG_USAGE, runConfig } from './configcli.ts';
 import { runDoctor } from './doctor.ts';
@@ -11,7 +12,8 @@ import { runMcp } from './mcp.ts';
 import { AUTO_USAGE, autoStatus, disableAuto, enableAuto, runAuto } from './auto.ts';
 import { runRollback, runUpdate } from './update.ts';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
+const DEFAULT_DIR = fs.existsSync('.prax/state.json') ? '.' : 'prax-server';
 
 const MCP_USAGE = `prax mcp [--dir <dossier>] : serveur MCP local (stdio) pour Claude, Cursor ou une autre IA.
 Il n'affiche rien lui-même : c'est l'IA qui le lance. Pour le brancher : prax ia claude-desktop.`;
@@ -46,7 +48,7 @@ Options de prax install :
   --mariadb-from <dossier>  MariaDB pour Windows déjà extrait (dossier avec bin\), au lieu de le télécharger
 
 Options de prax update :
-  --dir <dossier>        dossier du serveur (par défaut : ./prax-server)
+  --dir <dossier>        dossier du serveur (par défaut : le dossier courant s'il contient une installation, sinon ./prax-server)
   --version <X.Y.Z>      version voulue (par défaut : la dernière du canal retenu)
   --channel <canal>      change de canal (release, early, beta, dev) et le retient
   --token <jeton>        jeton de l'espace client (sinon : la licence de server.cfg, puis un code)
@@ -65,7 +67,7 @@ function parsePort(value: string, option: string): number {
 type DirArgs = { args: string[]; dir: string; resources: string | undefined; help: boolean };
 
 function parseDirArgs(argv: string[]): DirArgs {
-    const parsed: DirArgs = { args: [], dir: 'prax-server', resources: undefined, help: false };
+    const parsed: DirArgs = { args: [], dir: DEFAULT_DIR, resources: undefined, help: false };
     for (let index = 0; index < argv.length; index++) {
         const arg = argv[index] ?? '';
         if (arg === '--dir' || arg === '--resources') {
@@ -137,7 +139,7 @@ async function main(): Promise<number> {
     const { positionals, values } = parseArgs({
         allowPositionals: true,
         options: {
-            dir: { type: 'string', default: 'prax-server' },
+            dir: { type: 'string', default: DEFAULT_DIR },
             from: { type: 'string' },
             answers: { type: 'string' },
             yes: { type: 'boolean', default: false },
