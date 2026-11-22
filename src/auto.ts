@@ -123,7 +123,8 @@ export function enableAuto(dir: string, praxVersion: string): void {
     const command = installedCommand(layout);
     const settings: UpdaterSettings = { bin: command.bin, args: command.args, root: layout.root, prax: praxVersion, enabledAt: new Date().toISOString() };
     writeJson(path.join(cacheDir(layout), SETTINGS_FILE), settings);
-    log.ok(`La base lancera ${path.relative(layout.root, command.bin) || command.bin} pour se mettre à jour`);
+    const shown = command.bin.startsWith(layout.root + path.sep) ? path.relative(layout.root, command.bin) : command.bin;
+    log.ok(`La base lancera ${shown} pour se mettre à jour`);
     const permitted = hasChildProcessPermission(cfg);
     if (!permitted) {
         fs.copyFileSync(layout.serverCfg, `${layout.serverCfg}.bak`);
