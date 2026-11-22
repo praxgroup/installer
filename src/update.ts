@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { applySiteManifest, connectWithCode, connectWithLicense, connectWithToken, DEFAULT_BASE_CHANNEL, fetchRelease, isBaseChannel, resolveSite } from './account.ts';
@@ -60,6 +61,8 @@ const DEFAULT_GAME_PORT = 30120;
 const PROGRESS_EVERY_SECONDS = 15;
 const SHUTDOWN_WAIT_MS = 30_000;
 const SHUTDOWN_POLL_MS = 1_000;
+const CORE_READY_WAIT_MS = 120_000;
+const CORE_READY_POLL_MS = 2_000;
 
 function compareVersions(a: string, b: string): number {
     const left = a.split('.').map(Number);
@@ -184,18 +187,77 @@ async function planChanges(layout: Layout, next: Manifest, previous: Manifest | 
     return { replaced, added, removed };
 }
 
-async function stopServer(port: number, password: string | null): Promise<boolean> {
-    if (!(await probeServer(port))) return false;
-    if (!password) {
-        log.warn('Mot de passe RCON introuvable : le serveur ne peut pas être redémarré par prax.');
-        return false;
+async function waitCoreReady(port: number): Promise<boolean> {
+    const deadline = Date.now() + CORE_READY_WAIT_MS;
+    while (Date.now() < deadline) {
+        try {
+            const response = await fetch(`http://127.0.0.1:${port}/pcore/panel/api/branding`, { signal: AbortSignal.timeout(2_000) });
+            if (response.ok) return true;
+        } catch {
+            await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_POLL_MS));
+            continue;
+        }
+        await new Promise((resolve) => setTimeout(resolve, CORE_READY_POLL_MS));
     }
-    await sendRcon(port, password, 'quit').catch(() => '');
-    const deadline = Date.now() + SHUTDOWN_WAIT_MS;
+    return false;
+}
+
+async function waitOffline(port: number, limitMs: number): Promise<boolean> {
+    const deadline = Date.now() + limitMs;
     while (Date.now() < deadline) {
         if (!(await probeServer(port, 1_000))) return true;
         await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_POLL_MS));
     }
+    return false;
+}
+
+function isGameProcess(executable: string, commandLine: string, fxserverDir: string): boolean {
+    const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase();
+    return normalize(executable).startsWith(normalize(fxserverDir)) && /\+exec\s/.test(commandLine);
+}
+
+function gameProcesses(layout: Layout): number[] {
+    if (process.platform === 'win32') {
+        const script = "Get-CimInstance Win32_Process -Filter \"Name='FXServer.exe'\" | ForEach-Object { '{0}|{1}|{2}' -f $_.ProcessId, $_.ExecutablePath, $_.CommandLine }";
+        const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true });
+        return output.split(/\r?\n/).flatMap((line) => {
+            const [pid, executable = '', ...rest] = line.split('|');
+            return pid && isGameProcess(executable, rest.join('|'), layout.fxserver) ? [Number(pid)] : [];
+        });
+    }
+    return fs.readdirSync('/proc').filter((name) => /^\d+$/.test(name)).flatMap((name) => {
+        try {
+            const parts = fs.readFileSync(`/proc/${name}/cmdline`, 'utf8').split('\0');
+            const executable = fs.readlinkSync(`/proc/${name}/exe`);
+            return isGameProcess(executable, parts.join(' '), layout.fxserver) ? [Number(name)] : [];
+        } catch {
+            return [];
+        }
+    });
+}
+
+function stopGameProcesses(layout: Layout): number {
+    const pids = gameProcesses(layout);
+    for (const pid of pids) {
+        if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', windowsHide: true });
+        else process.kill(pid, 'SIGINT');
+    }
+    return pids.length;
+}
+
+async function stopServer(layout: Layout, port: number, password: string | null): Promise<boolean> {
+    if (!(await probeServer(port))) return false;
+    if (password) {
+        const answer = await sendRcon(port, password, 'quit').catch((error: Error) => error.message);
+        if (!/rcon_password|Invalid password|ne répond pas/i.test(answer) && (await waitOffline(port, SHUTDOWN_WAIT_MS))) return true;
+    }
+    const stopped = stopGameProcesses(layout);
+    if (stopped === 0) {
+        log.warn('Ni RCON (coupé par txAdmin) ni le processus du serveur de jeu ne sont accessibles.');
+        return false;
+    }
+    log.info(process.platform === 'win32' ? 'RCON indisponible (txAdmin le coupe) : serveur de jeu arrêté directement.' : 'RCON indisponible : serveur de jeu arrêté proprement (SIGINT).');
+    if (await waitOffline(port, SHUTDOWN_WAIT_MS)) return true;
     log.warn('Le serveur ne s\'est pas arrêté dans les 30 secondes.');
     return false;
 }
@@ -210,7 +272,7 @@ async function restartAndCheck(layout: Layout, state: InstallState, cfg: string,
         log.info('Le serveur ne tourne pas : la nouvelle version servira à son prochain démarrage.');
         return;
     }
-    const stopped = await stopServer(port, password);
+    const stopped = await stopServer(layout, port, password);
     if (!stopped) {
         log.warn('Redémarre le serveur toi-même (txAdmin ou console) pour charger la nouvelle version.');
         return;
@@ -232,7 +294,13 @@ async function restartAndCheck(layout: Layout, state: InstallState, cfg: string,
         log.info(`… toujours en démarrage (${elapsed} s)`);
     });
     if (info && missingResources(info).length === 0) {
-        log.ok(`Serveur en ligne sur le port ${port} : pcore et pguard démarrés`);
+        log.ok(`Serveur en ligne sur le port ${port} : pcore et pguard lancés`);
+        if (await waitCoreReady(port)) {
+            log.ok('Base prête : licence vérifiée et clé de la version reçue');
+            return;
+        }
+        log.warn('pcore est lancé mais la base n\'a pas fini de démarrer après 2 minutes (licence, clé de la version ou panel coupé ?).');
+        if (rollbackHint) log.info('Regarde sa console. Pour revenir à la version précédente : prax update --rollback');
         return;
     }
     log.warn(info ? `Le serveur répond, mais ${missingResources(info).join(' et ')} n'a pas démarré.` : `Le serveur ne répond pas sur le port ${port}.`);
