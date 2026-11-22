@@ -29,6 +29,7 @@ macOS : Cfx ne publie pas FXServer pour Mac. Il faut passer par l'image Docker.
 | `prax install` | se connecte au compte client (code à entrer sur prax-studio.fr, ou jeton `--token` / `PRAX_INSTALL_TOKEN`), télécharge la base et installe FXServer, la base de données, `server.cfg` et txAdmin |
 | `prax update` | met la base à jour : dernière version du canal retenu à l'installation (`--version`, `--channel` pour en changer), seuls les fichiers changés sont téléchargés, avec sauvegarde, puis redémarrage et vérification du serveur |
 | `prax update --rollback` | revient à la version d'avant la dernière mise à jour (fichiers ; `--database` remet aussi la base, serveur arrêté) |
+| `prax auto on` / `off` / `status` | mise à jour automatique : une tâche passe chaque minute et pose la mise à jour que la base demande (voir plus bas) |
 | `prax doctor` | cherche ce qui empêche le serveur de démarrer, réglages de `pconfig` compris |
 | `prax config get [chemin]` | valeur d'un réglage, sa valeur par défaut, son type et son aide ; sans chemin, la liste des réglages |
 | `prax config set <chemin> <valeur>` | modifie un réglage dans `pconfig`, après l'avoir vérifié avec le schéma de la base |
@@ -44,6 +45,17 @@ macOS : Cfx ne publie pas FXServer pour Mac. Il faut passer par l'image Docker.
 - **Sauvegarde** : avant d'écrire, il copie les fichiers remplacés ou retirés dans `.prax/backups/<date>_<version>/` et exporte la base de données (`--no-db-backup` pour le sauter). Les 5 dernières sauvegardes sont gardées.
 - **Fichiers** : seuls les fichiers changés sont téléchargés, chacun vérifié par son empreinte. `pconfig`, `server.cfg` et txAdmin ne sont jamais touchés. Les fichiers retirés de la base sont supprimés.
 - **Redémarrage** (`--no-restart` pour le sauter) : sous txAdmin, qui coupe RCON, il arrête le serveur de jeu et txAdmin le relance ; sinon il passe par RCON puis le script de démarrage. Il attend ensuite que la base ait fini de démarrer (licence vérifiée), 2 minutes au plus, et propose `--rollback` sinon.
+
+## Mise à jour automatique (`prax auto on`)
+
+La base ne peut lancer aucun programme depuis le serveur de jeu. `prax auto on` installe donc une tâche qui passe chaque minute : une tâche planifiée Windows lancée sans fenêtre (pour tous les démarrages en administrateur, sinon seulement quand la session est ouverte), un minuteur systemd avec `sudo`, ou une ligne cron. La copie de `prax` utilisée est rangée dans `.prax/bin/`.
+
+- La tâche ne fait rien tant que la base ne demande rien. Elle signale son passage à la base (`pcore/cache/updater.json`).
+- La base demande une mise à jour au démarrage du serveur si une nouvelle version est sortie et que personne n'est connecté. Pour une version marquée urgente par Prax, elle la demande tout de suite, après un compte à rebours annoncé en jeu si des joueurs sont là. Réglages : `Config.Updates` ; commande en jeu `/pxupdate status | now | cancel`.
+- La tâche fait alors un `prax update` complet (sauvegarde, export de la base, fichiers, redémarrage). Si la base ne démarre pas dans les 2 minutes, elle revient seule à la version d'avant, et la base ne redemande plus cette version.
+- Journal : `.prax/auto.log`. `prax auto status` montre la tâche, son dernier passage, la dernière mise à jour automatique et la fin du journal.
+- Il faut la licence dans `server.cfg` (`px:license`, `px:license_secret`) : sans elle, la tâche ne peut pas se connecter au site.
+- Après une nouvelle version de `prax`, relancer `prax auto on` pour que la tâche l'utilise.
 
 ## Ce que fait `prax install` sur la machine
 
