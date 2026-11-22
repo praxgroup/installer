@@ -22,4 +22,13 @@ if ($expected -ne $actual) {
 
 Move-Item -Force $partial $exe
 Remove-Item $checksum -Force
+
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (-not $userPath) { $userPath = '' }
+if (-not (($userPath -split ';') -contains $home_dir)) {
+    [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ';' + $home_dir).TrimStart(';')), 'User')
+    Write-Host "Commande prax ajoutée au PATH ($home_dir)."
+}
+if (-not (($env:Path -split ';') -contains $home_dir)) { $env:Path = "$env:Path;$home_dir" }
+
 & $exe install

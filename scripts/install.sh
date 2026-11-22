@@ -33,6 +33,18 @@ mv "$PRAX_HOME/prax.part" "$PRAX_HOME/prax"
 rm -f "$PRAX_HOME/prax.sha256"
 chmod +x "$PRAX_HOME/prax"
 
+if [ "$(id -u)" = "0" ]; then
+    LINK_DIR="/usr/local/bin"
+else
+    LINK_DIR="$HOME/.local/bin"
+fi
+mkdir -p "$LINK_DIR"
+ln -sf "$PRAX_HOME/prax" "$LINK_DIR/prax"
+case ":$PATH:" in
+    *":$LINK_DIR:"*) ;;
+    *) echo "Ajoute $LINK_DIR à ton PATH pour taper prax depuis n'importe quel dossier (ou lance $PRAX_HOME/prax)." ;;
+esac
+
 if [ -r /dev/tty ]; then
     exec "$PRAX_HOME/prax" install "$@" < /dev/tty
 fi
