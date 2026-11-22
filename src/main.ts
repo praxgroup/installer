@@ -8,9 +8,10 @@ import { InstallError, log } from './log.ts';
 import { DEFAULT_TXADMIN_PORT } from './platform.ts';
 import { IA_USAGE, runIa } from './ia.ts';
 import { runMcp } from './mcp.ts';
+import { AUTO_USAGE, autoStatus, disableAuto, enableAuto, runAuto } from './auto.ts';
 import { runRollback, runUpdate } from './update.ts';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 
 const MCP_USAGE = `prax mcp [--dir <dossier>] : serveur MCP local (stdio) pour Claude, Cursor ou une autre IA.
 Il n'affiche rien lui-même : c'est l'IA qui le lance. Pour le brancher : prax ia claude-desktop.`;
@@ -20,6 +21,7 @@ const USAGE = `prax ${VERSION} : installe et configure la base Prax
 Utilisation :
   prax install [options]     installe la base, FXServer, la base de données, server.cfg et txAdmin
   prax update [options]      met la base à jour (fichiers changés seulement), avec sauvegarde et retour arrière
+  prax auto <on|off|status>   mise à jour automatique : au redémarrage du serveur, et tout de suite pour une version urgente (prax auto --help)
   prax doctor [--dir <dossier>]   cherche ce qui empêche le serveur de démarrer
   prax config <get|set|unset|check>   lit et modifie les réglages de la base (prax config --help)
   prax ia <claude-desktop|claude-code|config>   branche une IA sur ce serveur (prax ia --help)
@@ -98,6 +100,24 @@ async function runMcpCommand(argv: string[]): Promise<number> {
     return runMcp(parsed.dir, parsed.resources, VERSION);
 }
 
+async function runAutoCommand(argv: string[]): Promise<number> {
+    const parsed = parseDirArgs(argv);
+    const action = parsed.args[0];
+    if (parsed.help || !action) {
+        console.log(AUTO_USAGE);
+        return action ? 0 : 1;
+    }
+    if (action === 'on') enableAuto(parsed.dir, VERSION);
+    else if (action === 'off') disableAuto(parsed.dir);
+    else if (action === 'status') autoStatus(parsed.dir);
+    else if (action === 'run') return runAuto(parsed.dir, VERSION);
+    else {
+        console.log(AUTO_USAGE);
+        return 1;
+    }
+    return 0;
+}
+
 function runIaCommand(argv: string[]): number {
     const parsed = parseDirArgs(argv);
     if (parsed.help) {
@@ -112,6 +132,7 @@ async function main(): Promise<number> {
     if (argv[0] === 'config') return runConfigCommand(argv.slice(1));
     if (argv[0] === 'mcp') return runMcpCommand(argv.slice(1));
     if (argv[0] === 'ia') return runIaCommand(argv.slice(1));
+    if (argv[0] === 'auto') return runAutoCommand(argv.slice(1));
 
     const { positionals, values } = parseArgs({
         allowPositionals: true,

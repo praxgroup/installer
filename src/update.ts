@@ -27,6 +27,14 @@ export type UpdateOptions = {
     restart: boolean;
     databaseBackup: boolean;
     force: boolean;
+    unattended?: boolean;
+};
+
+export type UpdateResult = {
+    updated: boolean;
+    from: string;
+    to: string;
+    ready: boolean | null;
 };
 
 export type RollbackOptions = {
@@ -138,6 +146,7 @@ async function connect(options: UpdateOptions, cfg: string): Promise<SiteSession
     const key = (readCfgValue(cfg, 'set px:license') ?? '').trim().toUpperCase();
     const secret = (readCfgValue(cfg, 'set px:license_secret') ?? '').trim();
     if (key && secret) return connectWithLicense(site, key, secret);
+    if (options.unattended) throw new InstallError('Pas de licence dans server.cfg (px:license et px:license_secret) : la mise à jour automatique ne peut pas se connecter au site.', 'Ajoute la licence à server.cfg, ou fais la mise à jour à la main avec prax update.');
     log.info('Pas de licence dans server.cfg : connexion par code, à entrer sur la page Installer du site.');
     return connectWithCode(site);
 }
@@ -262,7 +271,7 @@ async function stopServer(layout: Layout, port: number, password: string | null)
     return false;
 }
 
-async function restartAndCheck(layout: Layout, state: InstallState, cfg: string, rollbackHint: boolean): Promise<void> {
+async function restartAndCheck(layout: Layout, state: InstallState, cfg: string, rollbackHint: boolean): Promise<boolean | null> {
     log.step('Redémarrage');
     const port = gamePortOf(cfg);
     const secrets = readPrivateJson<LocalSecrets>(layout.localSecrets);
@@ -270,12 +279,12 @@ async function restartAndCheck(layout: Layout, state: InstallState, cfg: string,
     const wasOnline = await probeServer(port);
     if (!wasOnline) {
         log.info('Le serveur ne tourne pas : la nouvelle version servira à son prochain démarrage.');
-        return;
+        return null;
     }
     const stopped = await stopServer(layout, port, password);
     if (!stopped) {
         log.warn('Redémarre le serveur toi-même (txAdmin ou console) pour charger la nouvelle version.');
-        return;
+        return null;
     }
     const managedByTxAdmin = state.isDone('txadmin');
     if (!managedByTxAdmin) {
@@ -297,17 +306,18 @@ async function restartAndCheck(layout: Layout, state: InstallState, cfg: string,
         log.ok(`Serveur en ligne sur le port ${port} : pcore et pguard lancés`);
         if (await waitCoreReady(port)) {
             log.ok('Base prête : licence vérifiée et clé de la version reçue');
-            return;
+            return true;
         }
         log.warn('pcore est lancé mais la base n\'a pas fini de démarrer après 2 minutes (licence, clé de la version ou panel coupé ?).');
         if (rollbackHint) log.info('Regarde sa console. Pour revenir à la version précédente : prax update --rollback');
-        return;
+        return false;
     }
     log.warn(info ? `Le serveur répond, mais ${missingResources(info).join(' et ')} n'a pas démarré.` : `Le serveur ne répond pas sur le port ${port}.`);
     if (rollbackHint) log.info('Regarde sa console. Pour revenir à la version précédente : prax update --rollback');
+    return false;
 }
 
-export async function runUpdate(options: UpdateOptions): Promise<void> {
+export async function runUpdate(options: UpdateOptions): Promise<UpdateResult> {
     const layout = layoutOf(options.dir);
     const state = new InstallState(layout.state);
     if (!state.isDone('base')) throw new InstallError(`Aucune base Prax installée par prax dans ${layout.root}.`, 'Indique le dossier du serveur avec --dir, ou installe-la avec prax install.');
@@ -324,7 +334,7 @@ export async function runUpdate(options: UpdateOptions): Promise<void> {
     const manifest = await fetchRelease(session, options.version, channel);
     if (manifest.version === current && !options.force) {
         log.ok(`Déjà à jour : ${current} est la dernière version du canal ${channel}.`);
-        return;
+        return { updated: false, from: current, to: current, ready: null };
     }
     if (compareVersions(manifest.version, current) < 0 && !options.version) {
         throw new InstallError(`La dernière version du canal ${channel} (${manifest.version}) est plus ancienne que la tienne (${current}).`, 'Change de canal avec --channel, ou choisis une version précise avec --version.');
@@ -384,8 +394,12 @@ export async function runUpdate(options: UpdateOptions): Promise<void> {
     pruneBackups(layout);
     log.ok(`Base ${current} → ${manifest.version}. pconfig, server.cfg et txAdmin n'ont pas été touchés.`);
 
-    if (options.restart) await restartAndCheck(layout, state, cfg, true);
-    else log.info('Redémarre le serveur pour charger la nouvelle version.');
+    if (!options.restart) {
+        log.info('Redémarre le serveur pour charger la nouvelle version.');
+        return { updated: true, from: current, to: manifest.version, ready: null };
+    }
+    const ready = await restartAndCheck(layout, state, cfg, !options.unattended);
+    return { updated: true, from: current, to: manifest.version, ready };
 }
 
 export async function runRollback(options: RollbackOptions): Promise<void> {

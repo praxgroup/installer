@@ -381,6 +381,7 @@ export async function runInstall(options: InstallOptions): Promise<void> {
     log.ok('La base Prax est installée.');
     if (options.withTxAdmin) log.info(`txAdmin : http://localhost:${options.txAdminPort}, avec le compte txAdmin.`);
     log.info(`En jeu : F8 puis « connect localhost:${host.gamePort} ».`);
+    if (!state.isDone('auto')) log.info('Mises à jour automatiques (au redémarrage, et tout de suite pour une version urgente) : prax auto on');
 }
 
 async function machineSetup(layout: Layout, answers: Answers, host: Host, options: InstallOptions, script: string, state: InstallState): Promise<Autostart | null> {
