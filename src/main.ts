@@ -21,7 +21,7 @@ const USAGE = `prax ${VERSION} : installe et configure la base Prax
 Utilisation :
   prax install [options]     installe la base, FXServer, la base de données, server.cfg et txAdmin
   prax update [options]      met la base à jour (fichiers changés seulement), avec sauvegarde et retour arrière
-  prax auto <on|off|status>   mise à jour automatique : au redémarrage du serveur, et tout de suite pour une version urgente (prax auto --help)
+  prax auto <on|off|status>   mise à jour automatique lancée par la base : au redémarrage, et tout de suite pour une version urgente (prax auto --help)
   prax doctor [--dir <dossier>]   cherche ce qui empêche le serveur de démarrer
   prax config <get|set|unset|check>   lit et modifie les réglages de la base (prax config --help)
   prax ia <claude-desktop|claude-code|config>   branche une IA sur ce serveur (prax ia --help)
@@ -110,7 +110,7 @@ async function runAutoCommand(argv: string[]): Promise<number> {
     if (action === 'on') enableAuto(parsed.dir, VERSION);
     else if (action === 'off') disableAuto(parsed.dir);
     else if (action === 'status') autoStatus(parsed.dir);
-    else if (action === 'run') return runAuto(parsed.dir, VERSION);
+    else if (action === 'run') return runAuto(parsed.dir);
     else {
         console.log(AUTO_USAGE);
         return 1;
