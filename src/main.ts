@@ -12,7 +12,7 @@ import { runMcp } from './mcp.ts';
 import { AUTO_USAGE, autoStatus, disableAuto, enableAuto, runAuto } from './auto.ts';
 import { runRollback, runUpdate } from './update.ts';
 
-const VERSION = '0.4.1';
+const VERSION = '0.4.2';
 const DEFAULT_DIR = fs.existsSync('.prax/state.json') ? '.' : 'prax-server';
 
 const MCP_USAGE = `prax mcp [--dir <dossier>] : serveur MCP local (stdio) pour Claude, Cursor ou une autre IA.
@@ -55,6 +55,7 @@ Options de prax update :
   --no-db-backup         ne pas exporter la base avant la mise à jour
   --no-restart           ne pas redémarrer le serveur
   --force                réinstaller la même version
+  --no-doctor            ne pas lancer la vérification de prax doctor avant la mise à jour
   --rollback             revenir à la version d'avant la dernière mise à jour (fichiers)
   --database             avec --rollback : remettre aussi la base exportée (serveur arrêté)`;
 
@@ -157,6 +158,7 @@ async function main(): Promise<number> {
             database: { type: 'boolean', default: false },
             'no-restart': { type: 'boolean', default: false },
             'no-db-backup': { type: 'boolean', default: false },
+            'no-doctor': { type: 'boolean', default: false },
             force: { type: 'boolean', default: false },
             'txadmin-port': { type: 'string', default: String(DEFAULT_TXADMIN_PORT) },
             help: { type: 'boolean', short: 'h', default: false },
@@ -193,6 +195,7 @@ async function main(): Promise<number> {
             restart: !values['no-restart'],
             databaseBackup: !values['no-db-backup'],
             force: values.force,
+            doctor: !values['no-doctor'],
         });
         return 0;
     }

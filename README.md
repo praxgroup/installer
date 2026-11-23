@@ -42,6 +42,7 @@ macOS : Cfx ne publie pas FXServer pour Mac. Il faut passer par l'image Docker.
 ## Ce que fait `prax update`
 
 - **Connexion** : il signe une demande avec la licence de `server.cfg` (`px:license` et `px:license_secret`), sans code à entrer. Sans licence dans `server.cfg`, il passe par un jeton (`--token`) ou un code, comme `prax install`.
+- **Vérification** : avant de toucher à quoi que ce soit, il lance les contrôles de `prax doctor` et vérifie l'espace disque (téléchargement, sauvegarde et 512 Mo de marge). FXServer ou `server.cfg` absent, ou disque trop plein : la mise à jour s'arrête là. Les autres problèmes sont affichés, puis elle continue (`--no-doctor` pour sauter la vérification). Après l'installation, les réglages de `pconfig` sont relus avec le schéma de la nouvelle version.
 - **Sauvegarde** : avant d'écrire, il copie les fichiers remplacés ou retirés dans `.prax/backups/<date>_<version>/` et exporte la base de données (`--no-db-backup` pour le sauter). Les 5 dernières sauvegardes sont gardées.
 - **Fichiers** : seuls les fichiers changés sont téléchargés, chacun vérifié par son empreinte. `pconfig`, `server.cfg` et txAdmin ne sont jamais touchés. Les fichiers retirés de la base sont supprimés.
 - **Redémarrage** (`--no-restart` pour le sauter) : sous txAdmin, qui coupe RCON, il arrête le serveur de jeu et txAdmin le relance ; sinon il passe par RCON puis le script de démarrage. Il attend ensuite que la base ait fini de démarrer (licence vérifiée), 2 minutes au plus, et propose `--rollback` sinon.

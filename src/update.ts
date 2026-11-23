@@ -4,6 +4,9 @@ import path from 'node:path';
 import { applySiteManifest, connectWithCode, connectWithLicense, connectWithToken, DEFAULT_BASE_CHANNEL, fetchRelease, isBaseChannel, resolveSite } from './account.ts';
 import type { BaseChannel, SiteSession } from './account.ts';
 import type { DatabaseAccess, DatabaseSetup } from './database.ts';
+import { configFindings } from './configcli.ts';
+import { collectFindings, diskFinding } from './doctor.ts';
+import type { Finding } from './doctor.ts';
 import { dumpDatabase, restoreDatabase } from './dump.ts';
 import { layoutOf } from './layout.ts';
 import type { Layout } from './layout.ts';
@@ -27,6 +30,7 @@ export type UpdateOptions = {
     restart: boolean;
     databaseBackup: boolean;
     force: boolean;
+    doctor?: boolean;
     unattended?: boolean;
 };
 
@@ -71,6 +75,7 @@ const SHUTDOWN_WAIT_MS = 30_000;
 const SHUTDOWN_POLL_MS = 1_000;
 const CORE_READY_WAIT_MS = 120_000;
 const CORE_READY_POLL_MS = 2_000;
+const DISK_MARGIN_BYTES = 512 * 1024 * 1024;
 
 function compareVersions(a: string, b: string): number {
     const left = a.split('.').map(Number);
@@ -194,6 +199,50 @@ async function planChanges(layout: Layout, next: Manifest, previous: Manifest | 
     const kept = new Set(next.files.map((entry) => entry.path));
     const removed = (previous?.files ?? []).filter((entry) => !entry.preserve && !kept.has(entry.path) && fs.existsSync(destinationOf(layout, entry.path)));
     return { replaced, added, removed };
+}
+
+function fileSize(file: string): number {
+    try {
+        return fs.statSync(file).size;
+    } catch {
+        return 0;
+    }
+}
+
+function reportFindings(problems: Finding[]): void {
+    for (const problem of problems) {
+        if (problem.blocking) log.fail(problem.text);
+        else log.warn(problem.text);
+        if (problem.fix) log.info(`  → ${problem.fix}`);
+    }
+}
+
+async function checkBeforeUpdate(options: UpdateOptions, layout: Layout, changes: Awaited<ReturnType<typeof planChanges>>): Promise<void> {
+    log.step('Vérification (prax doctor)');
+    const { findings } = await collectFindings(options.dir);
+    const download = [...changes.replaced, ...changes.added].reduce((total, entry) => total + entry.size, 0);
+    const backup = [...changes.replaced, ...changes.removed].reduce((total, entry) => total + fileSize(destinationOf(layout, entry.path)), 0);
+    const disk = diskFinding(layout.root, download + backup + DISK_MARGIN_BYTES);
+    if (disk) findings.push(disk);
+    const problems = findings.filter((finding) => !finding.ok);
+    if (problems.length === 0) {
+        log.ok(`Aucun problème trouvé (${findings.length} contrôles)`);
+        return;
+    }
+    reportFindings(problems);
+    const blocking = problems.filter((problem) => problem.blocking);
+    if (blocking.length > 0) {
+        throw new InstallError(`Mise à jour annulée avant de toucher aux fichiers : ${blocking.map((problem) => problem.text).join(' ; ')}.`, 'Corrige ces points, ou saute la vérification avec --no-doctor.');
+    }
+    log.info('Ces points existaient avant la mise à jour : elle continue, mais ils peuvent empêcher le serveur de démarrer ensuite.');
+}
+
+function checkConfigAfterUpdate(layout: Layout, version: string): void {
+    if (!fs.existsSync(path.join(layout.resources, 'pcore', 'schema', 'index.json'))) return;
+    const problems = configFindings(layout.resources).filter((finding) => !finding.ok);
+    if (problems.length === 0) return;
+    log.warn(`Réglages de pconfig à revoir avec la ${version} :`);
+    reportFindings(problems);
 }
 
 async function waitCoreReady(port: number): Promise<boolean> {
@@ -345,6 +394,7 @@ export async function runUpdate(options: UpdateOptions): Promise<UpdateResult> {
     const changes = await planChanges(layout, manifest, previous);
     log.info(`${changes.replaced.length} fichier(s) changé(s), ${changes.added.length} nouveau(x), ${changes.removed.length} retiré(s).`);
     if (!previous) log.info('Liste des fichiers de l\'ancienne version inconnue (installée avant prax 0.3) : les fichiers retirés de la base resteront en place.');
+    if (options.doctor !== false) await checkBeforeUpdate(options, layout, changes);
 
     log.step('Sauvegarde');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -393,6 +443,7 @@ export async function runUpdate(options: UpdateOptions): Promise<UpdateResult> {
     state.markDone('base', details);
     pruneBackups(layout);
     log.ok(`Base ${current} → ${manifest.version}. pconfig, server.cfg et txAdmin n'ont pas été touchés.`);
+    checkConfigAfterUpdate(layout, manifest.version);
 
     if (!options.restart) {
         log.info('Redémarre le serveur pour charger la nouvelle version.');

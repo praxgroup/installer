@@ -8,11 +8,12 @@ import { detectHost } from './platform.ts';
 import { DEV_ONLY_CONVARS, hasDirective, readCfgValue } from './servercfg.ts';
 import { missingResources, probeServer } from './system.ts';
 
-export type Finding = { ok: boolean; text: string; fix?: string };
+export type Finding = { ok: boolean; text: string; fix?: string; blocking?: boolean };
 
 const PLACEHOLDERS = ['CHANGE_ME', 'remplacer_par_votre_license'];
 const REQUIRED_RESOURCES = ['pdeps', 'pstreams', 'pconfig', 'pcore', 'pguard'];
 const ENSURED_RESOURCES = ['pdeps', 'pstreams', 'pcore', 'pguard'];
+const MEGABYTE = 1024 * 1024;
 
 export async function runDoctor(dir: string): Promise<number> {
     const { root, findings } = await collectFindings(dir);
@@ -39,7 +40,7 @@ export async function collectFindings(dir: string): Promise<{ root: string; find
     const build = installedBuild(layout);
     findings.push(build && fs.existsSync(fxServerExecutable(layout, host.target))
         ? { ok: true, text: `FXServer ${build} installé` }
-        : { ok: false, text: 'FXServer absent', fix: 'Relance prax install.' });
+        : { ok: false, text: 'FXServer absent', fix: 'Relance prax install.', blocking: true });
 
     for (const resource of REQUIRED_RESOURCES) {
         const present = fs.existsSync(`${layout.resources}/${resource}/fxmanifest.lua`);
@@ -51,7 +52,7 @@ export async function collectFindings(dir: string): Promise<{ root: string; find
     if (fs.existsSync(`${layout.resources}/pcore/schema/index.json`)) findings.push(...configFindings(layout.resources));
 
     if (!fs.existsSync(layout.serverCfg)) {
-        findings.push({ ok: false, text: 'server.cfg absent', fix: 'Relance prax install --reconfigure.' });
+        findings.push({ ok: false, text: 'server.cfg absent', fix: 'Relance prax install --reconfigure.', blocking: true });
     } else {
         const cfg = fs.readFileSync(layout.serverCfg, 'utf8');
         for (const placeholder of PLACEHOLDERS) {
@@ -98,4 +99,19 @@ export async function collectFindings(dir: string): Promise<{ root: string; find
     }
 
     return { root: layout.root, findings };
+}
+
+export function diskFinding(dir: string, neededBytes: number): Finding | null {
+    let free: number;
+    try {
+        const stats = fs.statfsSync(dir);
+        free = Number(stats.bavail) * Number(stats.bsize);
+    } catch {
+        return null;
+    }
+    if (!Number.isFinite(free) || free <= 0) return null;
+    const freeText = `${Math.floor(free / MEGABYTE)} Mo libres`;
+    return free >= neededBytes
+        ? { ok: true, text: `Espace disque suffisant (${freeText})` }
+        : { ok: false, text: `Espace disque insuffisant : ${freeText}, il en faut environ ${Math.ceil(neededBytes / MEGABYTE)}`, fix: 'Libère de la place (anciennes sauvegardes dans .prax/backups, logs de txData), puis relance.', blocking: true };
 }
